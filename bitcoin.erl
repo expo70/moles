@@ -30,19 +30,19 @@ version(Address) ->
 		StartHeight:32/little-signed-integer
 	>>,
 	Checksum = checksum(Payload),
-	PayloadSize = bit_size(Payload),
+	PayloadSize = byte_size(Payload),
 	Message = list_to_binary([<<16#0b110907:32/big-unsigned-integer,
 		"version\0\0\0\0\0",
 		PayloadSize:32/little-unsigned-integer>>,
 		Checksum,
 		Payload]),
 	
-	%Size = bit_size(Message),
-	%<<X:Size/big-unsigned-integer>> = Message,
-	%integer_to_list(X,16).
-	{ok,Socket} = gen_tcp:connect(Address,18333,[binary, {packet, 0}]),
-	ok = gen_tcp:send(Socket, Message),
-	receive_data(Socket, []).
+	Size = bit_size(Message),
+	<<X:Size/big-unsigned-integer>> = Message,
+	integer_to_list(X,16).
+	%{ok,Socket} = gen_tcp:connect(Address,18333,[binary, {packet, 0}]),
+	%ok = gen_tcp:send(Socket, Message),
+	%receive_data(Socket, []).
 
 receive_data(Socket, SoFar) ->
 	receive
@@ -54,7 +54,8 @@ receive_data(Socket, SoFar) ->
 
 checksum(Payload) ->
 	crypto:start(),
-	<<Checksum:32/binary, _/binary>> = crypto:hash(sha256,crypto:hash(sha256,Payload)),
+	<<Checksum:4/binary, _/binary>> = crypto:hash(sha256,crypto:hash(sha256,Payload)),
+	io:format("~p~n",[Checksum]),
 	Checksum.
 
 unix_timestamp() ->
