@@ -10,7 +10,7 @@ version(Address) ->
 	Version = 70002,
 	Services = 1,
 	Timestamp = unix_timestamp(),
-	<<IPAddress:48/big-unsigned-integer>> = <<16#FF,16#FF,127,0,0,1>>,
+	<<IP6Address:48/big-unsigned-integer>> = <<16#FF,16#FF,127,0,0,1>>,
 	Port = 18333,
 	StartHeight = 329167,
 	Nonce = 16#f85379c9cb358012,
@@ -20,10 +20,10 @@ version(Address) ->
 		Services:64/little-unsigned-integer,
 		Timestamp:64/little-signed-integer,
 		Services:64/little-unsigned-integer,
-		IPAddress:128/big-unsigned-integer,
+		IP6Address:128/big-unsigned-integer,
 		Port:16/big-unsigned-integer,
 		Services:64/little-unsigned-integer,
-		IPAddress:128/big-unsigned-integer,
+		IP6Address:128/big-unsigned-integer,
 		Port:16/big-unsigned-integer,
 		Nonce:64/little-unsigned-integer,
 		0,
@@ -58,7 +58,7 @@ checksum(Payload) ->
 	Checksum.
 
 unix_timestamp() ->
-	{Mega, Secs, _} = now(),
+	{Mega, Secs, _} = erlang:timestamp(),
 	Timestamp = Mega*1000000 + Secs,
 	Timestamp.
 
