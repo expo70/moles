@@ -1,20 +1,45 @@
 -module(bitcoin).
--export([ping/0]).
+-export([version/0]).
 
-ping() ->
-	ping({178,21,118,174}).
- 
+version() ->
+	version({78,47,147,60}).
+
 % Testnet peer addresses can be obtained by
 % dig +short testnet-seed.bitcoin.schildbach.de
-ping(Address) ->
-	% Nonce
-	Payload = <<16#0094102111e3af4d:64/little-unsigned-integer>>,
+version(Address) ->
+	Version = 70002,
+	Services = 1,
+	Timestamp = unix_timestamp(),
+	<<IPAddress:48/big-unsigned-integer>> = <<16#FF,16#FF,127,0,0,1>>,
+	Port = 18333,
+	StartHeight = 329167,
+	Nonce = 16#f85379c9cb358012,
+
+	Payload = <<
+		Version:32/little-signed-integer,
+		Services:64/little-unsigned-integer,
+		Timestamp:64/little-signed-integer,
+		Services:64/little-unsigned-integer,
+		IPAddress:128/big-unsigned-integer,
+		Port:16/big-unsigned-integer,
+		Services:64/little-unsigned-integer,
+		IPAddress:128/big-unsigned-integer,
+		Port:16/big-unsigned-integer,
+		Nonce:64/little-unsigned-integer,
+		0,
+		StartHeight:32/little-signed-integer
+	>>,
+	Checksum = checksum(Payload),
 	PayloadSize = bit_size(Payload),
 	Message = list_to_binary([<<16#0b110907:32/big-unsigned-integer,
-		"ping\0\0\0\0\0\0\0\0":96,
-		PayloadSize:32/little-unsigned-integer>>
-		|checksum(Payload)]),
+		"version\0\0\0\0\0":96,
+		PayloadSize:32/little-unsigned-integer>>,
+		Checksum,
+		Payload]),
 	
+	%Size = bit_size(Message),
+	%<<X:Size/big-unsigned-integer>> = Message,
+	%integer_to_list(X,16).
 	{ok,Socket} = gen_tcp:connect(Address,18333,[binary, {packet, 0}]),
 	ok = gen_tcp:send(Socket, Message),
 	receive_data(Socket, []).
@@ -31,4 +56,9 @@ checksum(Payload) ->
 	crypto:start(),
 	<<Checksum:32/binary, _/binary>> = crypto:hash(sha256,crypto:hash(sha256,Payload)),
 	Checksum.
+
+unix_timestamp() ->
+	{Mega, Secs, _} = now(),
+	Timestamp = Mega*1000000 + Secs,
+	Timestamp.
 
