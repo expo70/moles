@@ -2,12 +2,12 @@
 -export([version/0]).
 
 version() ->
-	version({78,47,147,60}).
+	version({52,72,156,74}).
 
 % Testnet peer addresses can be obtained by
 % dig +short testnet-seed.bitcoin.schildbach.de
 version(Address) ->
-	Version = 70002,
+	Version = 60002,
 	Services = 1,
 	Timestamp = unix_timestamp(),
 	<<IP6Address:48/big-unsigned-integer>> = <<16#FF,16#FF,127,0,0,1>>,
@@ -32,7 +32,7 @@ version(Address) ->
 	Checksum = checksum(Payload),
 	PayloadSize = bit_size(Payload),
 	Message = list_to_binary([<<16#0b110907:32/big-unsigned-integer,
-		"version\0\0\0\0\0":96,
+		"version\0\0\0\0\0",
 		PayloadSize:32/little-unsigned-integer>>,
 		Checksum,
 		Payload]),
