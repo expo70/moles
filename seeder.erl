@@ -1,6 +1,6 @@
 -module(seeder).
 
--export(seeds/0)
+-export([seeds/0]).
 
 ns_lookup(Name, Class, Type) ->
 	case inet_res:resolve(Name, Class, Type) of
