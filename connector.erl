@@ -7,7 +7,7 @@
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
--record(state, {peer_infos, socket, port}).
+-record(state, {peer_infos, socket, peer_port, my_port}).
 
 
 %% API
@@ -23,9 +23,10 @@ connect() ->
 
 %% callbacks
 init([]) ->
-	Port = port(testnet),
-	listener:start_link(Port),
-	{ok, #state{peer_infos=[], port=Port}}.
+	PeerPort = port(regtest),
+	MyPort = 18445,
+	listener:start_link(MyPort),
+	{ok, #state{peer_infos=[], peer_port=PeerPort, my_port=MyPort}}.
 
 % version(NetType, {PeerAddress, PeerPort, PeerServicesType, PeerProtocolVersion}, {MyAddress, MyPort, MyServicesType, MyProtocolVersion}, StrUserAgent, StartBlockHeight, RelayQ)
 handle_call(connect, _From, S) ->
@@ -33,18 +34,22 @@ handle_call(connect, _From, S) ->
 		S#state.peer_infos =:= [] -> seeder:seeds();
 		S#state.peer_infos =/= [] -> S#state.peer_infos
 	end,
-	PeerAddress = hd(PeerInfos),
-	Port = S#state.port,
-	io:format("connecting to ~p:~p...~n",[PeerAddress, Port]),
-	Message = protocol:version(testnet, {PeerAddress, Port, node_network, 60002}, {{202,218,2,35}, Port, node_network, 60002}, "/Moles:0.0.1/", 0, false),
-	{ok, Socket} = gen_tcp:connect(PeerAddress, Port, [binary, {packet,0}, {active, false}]),
+	%PeerAddress = hd(PeerInfos),
+	PeerAddress = {127,0,0,1},
+	PeerPort = S#state.peer_port,
+	%MyAddress = {202,218,2,35},
+	MyAddress = {127,0,0,1},
+	MyPort = 18445,
+	io:format("connecting to ~p:~p...~n",[PeerAddress, PeerPort]),
+	Message = protocol:version(regtest, {PeerAddress, PeerPort, node_network, 60002}, {MyAddress, MyPort, node_network, 60002}, "/Moles:0.0.1/", 0, false),
+	{ok, Socket} = gen_tcp:connect(PeerAddress, PeerPort, [binary, {packet,0}, {active, false}]),
 	ok = gen_tcp:send(Socket, Message),
 	R = case gen_tcp:recv(Socket, 0, 2000) of
 		{ok, Pakcet} -> Pakcet;
 		{error, Reason} -> io:format("error ~p~n",[Reason]),<<>>
 	end,
-	io:format("Packet = ~p~n",[R]),
-	ok = gen_tcp:close(),
+	io:format("Packet = ~p~n",[protocol:read_message(R)]),
+	ok = gen_tcp:close(Socket),
 	% TODO: update S
 	{reply, ok, S};
 handle_call(_Request, _From, State) ->
@@ -64,4 +69,6 @@ code_change(_OldVsn, State, _Extra) ->
 	{ok, State}.
 
 %% Internal functions
-port(testnet) -> 18333.
+port(mainnet) ->  8333;
+port(testnet) -> 18333;
+port(regtest) -> 18444.

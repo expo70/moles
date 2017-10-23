@@ -6,9 +6,9 @@
 
 
 
-read_message(<<16#D9B4BEF9:32/little, Rest/binary>>) -> read_message(main, Rest); 
-read_message(<<16#DAB5BFFA:32/little, Rest/binary>>) -> read_message(testnet, Rest); 
-read_message(<<16#0709110B:32/little, Rest/binary>>) -> read_message(testnet3, Rest); 
+read_message(<<16#D9B4BEF9:32/little, Rest/binary>>) -> read_message(mainnet, Rest); 
+read_message(<<16#DAB5BFFA:32/little, Rest/binary>>) -> read_message(regtest, Rest); 
+read_message(<<16#0709110B:32/little, Rest/binary>>) -> read_message(testnet, Rest); 
 read_message(<<16#FEB4BEF9:32/little, Rest/binary>>) -> read_message(namecoin, Rest). 
 
 read_message(NetType, <<BinCommand:12/binary, Length:32/little, Checksum:4/binary, Payload:Length/binary, Rest/binary>>) ->
@@ -21,8 +21,9 @@ read_message(NetType, <<BinCommand:12/binary, Length:32/little, Checksum:4/binar
 	end.
 
 parse_version(<<MyProtocolVersion:32/little, MyServices:64/little, Timestamp:64/little, AddrRecv:26/binary, Rest/binary>>) ->
+	MyServicesType = parse_services(MyServices),
 	{PeerAddress, PeerPort, PeerServicesType, Time} = parse_net_addr(AddrRecv),
-	parse_version1({{MyServices, MyProtocolVersion}, Timestamp, {PeerAddress, PeerPort}, PeerServicesType, Time}, Rest).
+	parse_version1({{MyServicesType, MyProtocolVersion}, Timestamp, {PeerAddress, PeerPort}, PeerServicesType, Time}, Rest).
 
 parse_version1(B1, <<>>) -> {B1,{},{}};
 parse_version1(B1, Rest) ->
@@ -114,6 +115,26 @@ inv_vect(ObjectType, Hash) ->
 	Type = object_type(ObjectType),
 	<<Type:32/little, Hash:32/binary>>.
 
+read_alert(<<Version:32/little, RelayUntil:64/little, Expiration:64/little, ID:32/little, Cancel:32/little, Rest/binary>>) ->
+	%setCancel set<int32_t>
+	{Length,Rest1} = read_var_int(Rest),
+	%<<Head:(Length*4)/binary, Rest2/binary>> = Rest1,
+	%ListCancels = [X || <<X:32/little>> <= Head],
+	{ListCancels, Rest2} = read_int32_n(Rest1, Length),
+	read_alert([Version, RelayUntil, Expiration, ID, Cancel, ListCancels],Rest2).
+
+read_alert(Props, <<MinVer:32/little, MaxVer:32/little, Rest/binary>>) ->
+	%setSubVer set<var_str>
+	{Length,Rest1} = read_var_int(Rest),
+	{ListSubVers, Rest2} = read_var_str_n(Rest1,Length),
+	<<Priority:32/little, Rest3/binary>> = Rest2,
+	{Comment, Rest4} = read_var_str(Rest3),
+	{StatusBar, Rest5} = read_var_str(Rest4),
+	{Reserved, Rest6} = read_var_str(Rest5),
+	{list_to_tuple(Props++[MinVer, MaxVer, ListSubVers, Priority, Comment, StatusBar, Reserved]), Rest6}.
+
+
+
 
 services(ServicesType) ->
 	case ServicesType of
@@ -124,19 +145,22 @@ services(ServicesType) ->
 
 parse_services(Services) ->
 	case Services of
+		0 -> unnamed;
 		1 -> node_network;
 		2 -> node_getutxo;
-		4 -> node_bloom
+		4 -> node_bloom;
+		13 -> node_13
 	end.
 
-parse_bool(<<0>>) -> false;
-parse_bool(<<1>>) -> true.
+parse_bool(0) -> false;
+parse_bool(1) -> true.
 
 magic(NetType) ->
 	case NetType of
-		main     -> 16#D9B4BEF9;
-		testnet  -> 16#DAB5BFFA;
-		testnet3 -> 16#0709110B;
+		mainnet  -> 16#D9B4BEF9;
+		%testnet  -> 16#DAB5BFFA;
+		regtest  -> 16#DAB5BFFA;
+		testnet  -> 16#0709110B;
 		namecoin -> 16#FEB4BEF9
 	end.
 
@@ -170,6 +194,20 @@ read_var_str(Bin) ->
 	<<Str:Length/binary, Rest1/binary>> = Rest,
 	{binary_to_list(Str), Rest1}.
 
+read_var_str_n(Bin, N) -> read_var_str_n([], N, Bin).
+
+read_var_str_n(Acc, 0, Bin) -> {lists:reverse(Acc), Bin};
+read_var_str_n(Acc, N, Bin) when is_integer(N) ->
+	{Str, Rest} = read_var_str(Bin),
+	read_var_str_n([Str|Acc], N-1, Rest).
+
+read_int32_n(Bin, N) -> read_int32_n([], N, Bin).
+
+read_int32_n(Acc, 0, Bin) -> {lists:reverse(Acc), Bin};
+read_int32_n(Acc, N, Bin) when is_integer(N) ->
+	<<Int:32/little, Rest/binary>> = Bin,
+	read_int32_n([Int|Acc], N-1, Rest).
+
 atom_to_binary(Atom) -> list_to_binary(atom_to_list(Atom)).
 
 
@@ -196,11 +234,26 @@ bin_to_hexstr(Bin,Sep) ->
   string:join([io_lib:format("~2.16.0B", [X]) ||
       X <- binary_to_list(Bin)], Sep).
 
-hexstr_to_bin(Str) -> hexstr_to_bin(Str, "").
+hexstr_to_bin(Str) ->
+	T = partition(Str, 2),
+	list_to_binary([list_to_integer(S,16) || S <- T]).
 
 hexstr_to_bin(Str,Sep) ->
 	T = string:tokens(Str,Sep),
 	list_to_binary([list_to_integer(S,16) || S <- T]).
+
+
+% from https://stackoverflow.com/questions/31395608/how-to-split-a-list-of-strings-into-given-number-of-lists-in-erlang
+partition(L, N) when is_integer(N), N > 0 ->
+	partition(N, 0, L, []).
+
+partition(_, _, [], Acc) ->
+	[lists:reverse(Acc)];
+partition(N, N, L, Acc) ->
+	[lists:reverse(Acc) | partition(N, 0, L, [])];
+partition(N, X, [H|T], Acc) ->
+	partition(N, X+1, T, [H|Acc]).
+
 
 
 -ifdef(EUNIT).
