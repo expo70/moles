@@ -23,8 +23,8 @@ connect() ->
 
 %% callbacks
 init([]) ->
-	PeerPort = port(regtest),
-	MyPort = 18445,
+	PeerPort = port(regtest)+1,
+	MyPort = port(regtest),
 	listener:start_link(MyPort),
 	{ok, #state{peer_infos=[], peer_port=PeerPort, my_port=MyPort}}.
 
@@ -39,16 +39,22 @@ handle_call(connect, _From, S) ->
 	PeerPort = S#state.peer_port,
 	%MyAddress = {202,218,2,35},
 	MyAddress = {127,0,0,1},
-	MyPort = 18445,
+	MyPort = S#state.my_port,
 	io:format("connecting to ~p:~p...~n",[PeerAddress, PeerPort]),
 	Message = protocol:version(regtest, {PeerAddress, PeerPort, node_network, 60002}, {MyAddress, MyPort, node_network, 60002}, "/Moles:0.0.1/", 0, false),
 	{ok, Socket} = gen_tcp:connect(PeerAddress, PeerPort, [binary, {packet,0}, {active, false}]),
 	ok = gen_tcp:send(Socket, Message),
 	R = case gen_tcp:recv(Socket, 0, 2000) of
-		{ok, Pakcet} -> Pakcet;
+		{ok, Packet} -> Packet;
 		{error, Reason} -> io:format("error ~p~n",[Reason]),<<>>
 	end,
 	io:format("Packet = ~p~n",[protocol:read_message(R)]),
+
+	ok = gen_tcp:send(Socket, protocol:verack(regtest)),
+	{ok, Packet2} = gen_tcp:recv(Socket, 0, 2000),
+	io:format("Packet = ~p~n",[protocol:read_message(Packet2)]),
+
+	
 	ok = gen_tcp:close(Socket),
 	% TODO: update S
 	{reply, ok, S};
