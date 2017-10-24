@@ -68,7 +68,12 @@ version(NetType, {PeerAddress, PeerPort, PeerServicesType, PeerProtocolVersion},
 
 verack(NetType) -> message(NetType, verack, <<>>).
 
+sendheaders(NetType, ProtocolVersion) when ProtocolVersion >= 70012 ->
+	message(NetType, sendheaders, <<>>).
+
 parse_verack(<<>>) -> ok.
+
+parse_sendheaders(<<>>) -> ok.
 
 ping(NetType) ->
 	Nonce = nonce64,
@@ -129,7 +134,7 @@ inv_vect(ObjectType, Hash) ->
 
 parse_inv_vect(<<Type:32/little, Hash:32/binary>>) ->
 	ObjectType = parse_object_type(Type),
-	{ObjectType, Hash}.
+	{ObjectType, parse_hash(Hash)}.
 
 read_alert(<<Version:32/little, RelayUntil:64/little, Expiration:64/little, ID:32/little, Cancel:32/little, Rest/binary>>) ->
 	%setCancel set<int32_t>
@@ -149,11 +154,23 @@ read_alert(Props, <<MinVer:32/little, MaxVer:32/little, Rest/binary>>) ->
 	{Reserved, Rest6} = read_var_str(Rest5),
 	{list_to_tuple(Props++[MinVer, MaxVer, ListSubVers, Priority, Comment, StatusBar, Reserved]), Rest6}.
 
+getblocks(NetType, {ProtocolVersion, Hashes, HashStop}) ->
+	HashesBin = [hash(H) || H <- Hashes],
+	HashStopBin = hash(HashStop),
+	Payload = list_to_binary([<<ProtocolVersion:32/little>>, HashesBin, <<HashStopBin>>]),
+	message(NetType, getblocks, Payload).
 
-parse_getblocks(<<Version:32/little, Rest/binary>>) ->
+parse_getblocks(<<ProtocolVersion:32/little, Rest/binary>>) ->
 	{_HashCount, Rest1} = read_var_int(Rest),
 	RHashes = lists:reverse(partition(binary_to_list(Rest1), 32)),
-	{Version, [parse_hash(list_to_binary(L)) || L <-lists:reverse(tl(RHashes))], parse_hash(list_to_binary(hd(RHashes)))}.
+	{ProtocolVersion, [parse_hash(list_to_binary(L)) || L <-lists:reverse(tl(RHashes))], parse_hash(list_to_binary(hd(RHashes)))}.
+
+getheaders(NetType, {ProtocolVersion, Hashes, HashStop}) ->
+	HashCount = var_int(length(Hashes)),
+	HashesBin = [hash(H) || H <- Hashes],
+	HashStopBin = hash(HashStop),
+	Payload = list_to_binary([<<ProtocolVersion:32/little, HashCount/binary>>, HashesBin, <<HashStopBin/binary>>]),
+	message(NetType, getheaders, Payload).
 
 parse_getheaders(Bin) -> parse_getblocks(Bin).
 
@@ -184,7 +201,7 @@ read_tx_in_n(Acc, N, Bin) when is_integer(N), N>0 ->
 	<<Sequence:32/little, Rest3/binary>> = Rest2,
 	read_tx_in_n([{parse_outpoint(PreviousOutput), SignatureScript, Sequence}|Acc], N-1, Rest3).
 
-parse_outpoint(<<Hash:32/binary, Index:32/little>>) -> {Hash, Index}.
+parse_outpoint(<<Hash:32/binary, Index:32/little>>) -> {parse_hash(Hash), Index}.
 
 read_tx_out_n(Bin, N) -> read_tx_out_n([], N, Bin).
 
@@ -206,20 +223,63 @@ read_block_header_n(Acc, N, Bin) when is_integer(N), N>0 ->
 	{BlockHeader, Rest} = read_block_header(Bin),
 	read_block_header_n([BlockHeader|Acc], N-1, Rest).
 
-services(ServicesType) ->
-	case ServicesType of
-		node_network -> 1;
-		node_getutxo -> 2;
-		node_bloom   -> 4
+
+parse_reject(Bin) ->
+	{MessageType, Rest} = read_var_str(Bin),
+	<<CCode, Rest1/binary>> = Rest,
+	{Reason, Rest2} = read_var_str(Rest1),
+
+	{list_to_atom(MessageType), parse_ccode(CCode), Reason, Rest2}.
+
+parse_ccode(C) ->
+	case C of
+		16#01 -> reject_malformed;
+		16#10 -> reject_invalid;
+		16#11 -> reject_obsolete;
+		16#12 -> reject_duplicate;
+		16#40 -> reject_nonstandard;
+		16#41 -> reject_dust;
+		16#42 -> reject_insufficientfee;
+		16#43 -> reject_checkpoint;
+		_Other -> C
 	end.
 
-parse_services(Services) ->
-	case Services of
-		0 -> unnamed;
-		1 -> node_network;
-		2 -> node_getutxo;
-		4 -> node_bloom;
-		13 -> node_13
+
+
+
+% see ServiceFlags in bitcoin-master/src/protoco.h
+services(ServicesType) when not is_list(ServicesType) ->
+	services(0, [ServicesType]);
+services(ServicesType) when is_list(ServicesType) ->
+	services(0, ServicesType).
+
+services(Acc, []) -> Acc;
+services(Acc, [H|T]) ->
+	case H of
+		node_none    -> services(Acc+0, T);
+		node_network -> services(Acc+1, T);
+		node_getutxo -> services(Acc+2, T);
+		node_bloom   -> services(Acc+4, T);
+		node_witness -> services(Acc+8, T);
+		node_xthin   -> services(Acc+16, T)
+	end.
+
+parse_services(0)        -> []; % node_none
+parse_services(Services) -> parse_services([], 5, Services). %NOTE: ignores the other uknown flags
+
+parse_services(Acc, 0, _Services) -> lists:reverse(Acc);
+parse_services(Acc, N, Services) when is_integer(N), N>0 ->
+	case Services band (2#1 bsl (N-1)) of
+		0     -> parse_services(Acc, N-1, Services);
+		_Other ->
+			H = case N of
+				1 -> node_network;
+				2 -> node_getutxo;
+				3 -> node_bloom;
+				4 -> node_witness;
+				5 -> node_xthin
+			end,
+			parse_services([H|Acc], N-1, Services)
 	end.
 
 parse_bool(0) -> false;
@@ -295,13 +355,15 @@ atom_to_bin12(Command) ->
 	Len = byte_size(BinCommand),
 	<<BinCommand/binary,0:(8*(12-Len))>>.
 
-bin12_to_atom(Bin12) ->
-	L = string:strip(binary_to_list(Bin12), right, 0),
+bin12_to_atom(Bin) when byte_size(Bin) == 12 ->
+	L = string:strip(binary_to_list(Bin), right, 0),
 	list_to_atom(L).
 
 dhash(Bin) -> crypto:hash(sha256, crypto:hash(sha256, Bin)).
 
 parse_hash(<<Hash:32/binary>>) -> bin_to_hexstr(Hash).
+hash(Str) when length(Str)==2*32 ->
+	hexstr_to_bin(Str).
 
 unix_timestamp() ->
 	{Mega, Secs, _} = erlang:timestamp(),
@@ -384,6 +446,13 @@ read_var_str_test_() ->
 		?_assertEqual(read_var_str(var_str("")), {"",<<>>}),
 		?_assertEqual(read_var_str(var_str("ABC")), {"ABC",<<>>})
 	
+	].
+services_test_() ->
+	[
+		?_assertEqual(services([]), 0),
+		?_assertEqual(services(node_network), 1),
+		?_assertEqual(services(node_none), 0),
+		?_assertEqual(services([node_network, node_bloom, node_witness]), 13)
 	].
 
 

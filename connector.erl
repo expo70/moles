@@ -1,13 +1,17 @@
 -module(connector).
 
+-define(HASH0, "0000000000000000000000000000000000000000000000000000000000000000").
+-define(REGTEST_GENESIS_BLOCK_HASH, "06226e46111a0b59caaf126043eb5bbf28c34f3a5e332a1fc7b2b73cf188910f").
+
 -behaviour(gen_server).
 
 -export([start_link/0, stop/0, connect/0]).
 
+
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
--record(state, {net_type, peer_infos, socket, peer_address, peer_port, my_address, my_port, buf}).
+-record(state, {net_type, peer_infos, socket, peer_protocol_version, peer_address, peer_port, my_protocol_version, my_address, my_port, buf}).
 
 
 %% API
@@ -28,9 +32,10 @@ init([]) ->
 	PeerPort = port(NetType)+1, %bitcoind -regtest -port=xxxx -daemon
 	MyAddress = {127,0,0,1},
 	MyPort = port(NetType),
+	MyProtocolVersion = 60002,
 	
 	listener:start_link(MyPort),
-	{ok, #state{net_type=NetType, peer_infos=[], peer_address=PeerAddress, peer_port=PeerPort, my_address=MyAddress, my_port=MyPort}}.
+	{ok, #state{net_type=NetType, peer_infos=[], peer_address=PeerAddress, peer_port=PeerPort, peer_protocol_version=0, my_address=MyAddress, my_port=MyPort, my_protocol_version=MyProtocolVersion}}.
 
 handle_call(_Request, _From, S) -> {reply, ok, S}.
 
@@ -67,8 +72,10 @@ handshake(S) ->
 	PeerPort = S#state.peer_port,
 	MyAddress = S#state.my_address,
 	MyPort = S#state.my_port,
+	MyProtocolVersion = S#state.my_protocol_version,
+	PeerProtocolVersion = MyProtocolVersion,
 
-	Message = protocol:version(NetType, {PeerAddress, PeerPort, node_network, 60002}, {MyAddress, MyPort, node_network, 60002}, "/Moles:0.0.1/", 0, false),
+	Message = protocol:version(NetType, {PeerAddress, PeerPort, node_network, PeerProtocolVersion}, {MyAddress, MyPort, node_network, MyProtocolVersion}, "/Moles:0.0.1/", 0, false),
 	ok = gen_tcp:send(Socket, Message),
 	{ok, Packet } = gen_tcp:recv(Socket, 0, 2000),
 	{ok, {NetType, version, Payload, Rest}} = protocol:read_message(Packet),
@@ -78,6 +85,7 @@ handshake(S) ->
 	io:format("Packet (verack) = ~p~n",[protocol:parse_verack(Payload1)]),
 	
 	ok = gen_tcp:send(Socket, protocol:verack(regtest)),
+ok = gen_tcp:send(Socket, protocol:getheaders(regtest, {MyProtocolVersion, [?REGTEST_GENESIS_BLOCK_HASH], ?HASH0})),
 	ok = inet:setopts(Socket, [{active, once}]),
 	{ok, S#state{buf=Rest1}}.
 
@@ -95,6 +103,10 @@ loop(S) ->
 					gen_tcp:send(S#state.socket, protocol:pong(S#state.net_type, Nonce));
 				getheaders ->
 					io:format("Packet (getheaders) = ~p~n", [protocol:parse_getheaders(Payload)]);
+				sendheaders ->
+					io:format("Packet (sendheaders) = ~p~n", [protocol:parse_sendheaders(Payload)]);
+				reject ->
+					io:format("Packet (reject) = ~p~n", [protocol:parse_reject(Payload)]);
 				alert ->
 					io:format("Packet (alert) = ~p~n", [Payload])
 			end;
@@ -122,6 +134,9 @@ stop(Reason, S) ->
 	gen_tcp:close(S#state.socket),
 	{stop, Reason, S}.
 
+
 port(mainnet) ->  8333;
 port(testnet) -> 18333;
 port(regtest) -> 18444.
+
+
