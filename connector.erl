@@ -109,6 +109,8 @@ loop(S) ->
 					io:format("Packet (sendheaders) = ~p~n", [protocol:parse_sendheaders(Payload)]);
 				headers ->
 					io:format("Packet (headers) = ~p~n", [protocol:parse_headers(Payload)]);
+				blocks ->
+					io:format("Packet (blocks) = ~p~n", [protocol:parse_blocks(Payload)]);
 				reject ->
 					io:format("Packet (reject) = ~p~n", [protocol:parse_reject(Payload)]);
 				alert ->

@@ -155,9 +155,10 @@ read_alert(Props, <<MinVer:32/little, MaxVer:32/little, Rest/binary>>) ->
 	{list_to_tuple(Props++[MinVer, MaxVer, ListSubVers, Priority, Comment, StatusBar, Reserved]), Rest6}.
 
 getblocks(NetType, {ProtocolVersion, Hashes, HashStop}) ->
+	HashCount = var_int(length(Hashes)),
 	HashesBin = [hash(H) || H <- Hashes],
 	HashStopBin = hash(HashStop),
-	Payload = list_to_binary([<<ProtocolVersion:32/little>>, HashesBin, <<HashStopBin>>]),
+	Payload = list_to_binary([<<ProtocolVersion:32/little, HashCount/binary>>, HashesBin, <<HashStopBin/binary>>]),
 	message(NetType, getblocks, Payload).
 
 parse_getblocks(<<ProtocolVersion:32/little, Rest/binary>>) ->
@@ -165,6 +166,7 @@ parse_getblocks(<<ProtocolVersion:32/little, Rest/binary>>) ->
 	RHashes = lists:reverse(partition(binary_to_list(Rest1), 32)),
 	{ProtocolVersion, [parse_hash(list_to_binary(L)) || L <-lists:reverse(tl(RHashes))], parse_hash(list_to_binary(hd(RHashes)))}.
 
+%NOTE: similar to getblocks()
 getheaders(NetType, {ProtocolVersion, Hashes, HashStop}) ->
 	HashCount = var_int(length(Hashes)),
 	HashesBin = [hash(H) || H <- Hashes],
@@ -174,10 +176,10 @@ getheaders(NetType, {ProtocolVersion, Hashes, HashStop}) ->
 
 parse_getheaders(Bin) -> parse_getblocks(Bin).
 
-parse_tx(<<Version:32/little-signed, 0, 1, Rest/binary>>) -> parse_tx(Version, true, Rest);
-parse_tx(<<Version:32/little-signed, Rest/binary>>) -> parse_tx(Version, false, Rest).
+read_tx(<<Version:32/little-signed, 0, 1, Rest/binary>>) -> read_tx(Version, true, Rest);
+read_tx(<<Version:32/little-signed, Rest/binary>>) -> read_tx(Version, false, Rest).
 
-parse_tx(Version, _HasWitnessQ, Rest) ->
+read_tx(Version, _HasWitnessQ, Rest) ->
 	{TxInCount, Rest1} = read_var_int(Rest),
 	{TxIns, Rest2} = read_tx_in_n(Rest1, TxInCount),
 	{TxOutCount, Rest3} = read_var_int(Rest2),
@@ -187,10 +189,20 @@ parse_tx(Version, _HasWitnessQ, Rest) ->
 	%	false -> 0
 	%end,
 	%{TxWitnesses, Rest4} = read_tx_witness_n(Rest3, TxWitnessCount),
-	<<LockTime:32/little>> = Rest3,
+	<<LockTime:32/little, Rest4/binary>> = Rest3,
 	%{Version, TxIns, TxOuts, TxWitnesses, LockTime}.
-	{Version, TxIns, TxOuts, LockTime}.
+	{{Version, TxIns, TxOuts, LockTime}, Rest4}.
 
+%% Tx
+read_tx_n(Bin, N) -> read_tx_n([], N, Bin).
+
+read_tx_n(Acc, 0, Bin) -> {lists:reverse(Acc), Bin};
+read_tx_n(Acc, N, Bin) when is_integer(N), N>0 ->
+	{Tx, Rest} = read_tx(Bin),
+	read_tx_n([Tx|Acc], N-1, Rest).
+
+
+%% TxIn
 read_tx_in_n(Bin, N) -> read_tx_in_n([], N, Bin).
 
 read_tx_in_n(Acc, 0, Bin) -> {lists:reverse(Acc), Bin};
@@ -201,8 +213,10 @@ read_tx_in_n(Acc, N, Bin) when is_integer(N), N>0 ->
 	<<Sequence:32/little, Rest3/binary>> = Rest2,
 	read_tx_in_n([{parse_outpoint(PreviousOutput), SignatureScript, Sequence}|Acc], N-1, Rest3).
 
+%% Outpoint
 parse_outpoint(<<Hash:32/binary, Index:32/little>>) -> {parse_hash(Hash), Index}.
 
+%% TxOut
 read_tx_out_n(Bin, N) -> read_tx_out_n([], N, Bin).
 
 read_tx_out_n(Acc, 0, Bin) -> {lists:reverse(Acc), Bin};
@@ -212,9 +226,30 @@ read_tx_out_n(Acc, N, Bin) when is_integer(N), N>0 ->
 	<<PkScript:PkScriptLength/binary, Rest2>> = Rest1,
 	read_tx_out_n([{Value, PkScript}|Acc], N-1, Rest2).
 
+%% Block
+read_block(Bin) ->
+	{{_Version, _PrevBlockHash, _MerkleRootHash, _Timestamp, _Bits, _Nonce, TxnCount}=BlockHeader, Rest} = read_block_header(Bin),
+	{Txs, Rest1} = read_tx_n(Rest, TxnCount),
+	{{BlockHeader, Txs}, Rest1}.
+
+read_block_n(Bin, N) -> read_block_n([], N, Bin).
+
+read_block_n(Acc, 0, Bin) -> {lists:reverse(Acc), Bin};
+read_block_n(Acc, N, Bin) when is_integer(N), N>0 ->
+	{Block, Rest} = read_block(Bin),
+	read_block_n([Block|Acc], N-1, Rest).
+
+%% Block Hash
+%% https://en.bitcoin.it/wiki/Block_hashing_algorithm
+block_hash(Version, PrevBlock, MerkleRoot, Timestamp, Bits, Nonce) ->
+	dhash(<<Version:32/little, PrevBlock:32/binary, MerkleRoot:32/binary, Timestamp:32/little, Bits:32/little, Nonce:32/little>>).
+
+
+%% Block Header
 read_block_header(<<Version:32/little, PrevBlock:32/binary, MerkleRoot:32/binary, Timestamp:32/little, Bits:32/little, Nonce:32/little, Rest/binary>>) ->
+	Hash = block_hash(Version, PrevBlock, MerkleRoot, Timestamp, Bits, Nonce),
 	{TxnCount, Rest1} = read_var_int(Rest),
-	{{Version, parse_hash(PrevBlock), parse_hash(MerkleRoot), Timestamp, Bits, Nonce, TxnCount}, Rest1}.
+	{{parse_hash(Hash), Version, parse_hash(PrevBlock), parse_hash(MerkleRoot), Timestamp, Bits, Nonce, TxnCount}, Rest1}.
 
 read_block_header_n(Bin, N) -> read_block_header_n([], N, Bin).
 
@@ -224,12 +259,21 @@ read_block_header_n(Acc, N, Bin) when is_integer(N), N>0 ->
 	read_block_header_n([BlockHeader|Acc], N-1, Rest).
 
 
+%% Headers message
 parse_headers(Bin) ->
 	{Count, Rest} = read_var_int(Bin),
-	Headers = read_block_header_n(Rest, Count),
+	{Headers, _Rest1} = read_block_header_n(Rest, Count),
 	Headers.
 
 
+%% Blocks message
+parse_blocks(Bin) ->
+	{Count, Rest} = read_var_int(Bin),
+	{Blocks, _Rest1} = read_block_n(Rest, Count),
+	Blocks.
+
+
+%% Reject message
 parse_reject(Bin) ->
 	{MessageType, Rest} = read_var_str(Bin),
 	<<CCode, Rest1/binary>> = Rest,
@@ -252,6 +296,7 @@ parse_ccode(C) ->
 
 
 
+%% Services
 
 % see ServiceFlags in bitcoin-master/src/protoco.h
 services(ServicesType) when not is_list(ServicesType) ->
@@ -379,8 +424,8 @@ unix_timestamp() ->
 bin_to_hexstr(Bin) -> bin_to_hexstr(Bin,"").
 
 bin_to_hexstr(Bin,Sep) ->
-  lists:flatten(string:join([io_lib:format("~2.16.0B", [X]) ||
-      X <- binary_to_list(Bin)], Sep)).
+  string:to_lower(lists:flatten(string:join([io_lib:format("~2.16.0B", [X]) ||
+      X <- binary_to_list(Bin)], Sep))).
 
 hexstr_to_bin("") -> <<>>;
 hexstr_to_bin(Str) ->
