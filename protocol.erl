@@ -214,7 +214,7 @@ read_tx_out_n(Acc, N, Bin) when is_integer(N), N>0 ->
 
 read_block_header(<<Version:32/little, PrevBlock:32/binary, MerkleRoot:32/binary, Timestamp:32/little, Bits:32/little, Nonce:32/little, Rest/binary>>) ->
 	{TxnCount, Rest1} = read_var_int(Rest),
-	{{Version, PrevBlock, MerkleRoot, Timestamp, Bits, Nonce, TxnCount}, Rest1}.
+	{{Version, parse_hash(PrevBlock), parse_hash(MerkleRoot), Timestamp, Bits, Nonce, TxnCount}, Rest1}.
 
 read_block_header_n(Bin, N) -> read_block_header_n([], N, Bin).
 
@@ -222,6 +222,12 @@ read_block_header_n(Acc, 0, Bin) -> {lists:reverse(Acc), Bin};
 read_block_header_n(Acc, N, Bin) when is_integer(N), N>0 ->
 	{BlockHeader, Rest} = read_block_header(Bin),
 	read_block_header_n([BlockHeader|Acc], N-1, Rest).
+
+
+parse_headers(Bin) ->
+	{Count, Rest} = read_var_int(Bin),
+	Headers = read_block_header_n(Rest, Count),
+	Headers.
 
 
 parse_reject(Bin) ->

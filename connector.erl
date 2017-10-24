@@ -101,10 +101,14 @@ loop(S) ->
 					Nonce = protocol:parse_ping(Payload),
 					io:format("Packet (ping) = ~p~n", [Nonce]),
 					gen_tcp:send(S#state.socket, protocol:pong(S#state.net_type, Nonce));
+				addr ->
+					io:format("Packet (addr) = ~p~n", [Payload]);
 				getheaders ->
 					io:format("Packet (getheaders) = ~p~n", [protocol:parse_getheaders(Payload)]);
 				sendheaders ->
 					io:format("Packet (sendheaders) = ~p~n", [protocol:parse_sendheaders(Payload)]);
+				headers ->
+					io:format("Packet (headers) = ~p~n", [protocol:parse_headers(Payload)]);
 				reject ->
 					io:format("Packet (reject) = ~p~n", [protocol:parse_reject(Payload)]);
 				alert ->
