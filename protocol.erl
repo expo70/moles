@@ -6,6 +6,7 @@
 
 
 
+read_message(<<>>) -> {error, empty};
 read_message(<<16#D9B4BEF9:32/little, Rest/binary>>) -> read_message(mainnet, Rest); 
 read_message(<<16#DAB5BFFA:32/little, Rest/binary>>) -> read_message(regtest, Rest); 
 read_message(<<16#0709110B:32/little, Rest/binary>>) -> read_message(testnet, Rest); 
@@ -18,7 +19,8 @@ read_message(NetType, <<BinCommand:12/binary, Length:32/little, Checksum:4/binar
 	case RealChecksum of
 		Checksum -> {ok, {NetType, Command, Payload, Rest}};
 		       _ -> {error, checksum, {NetType, Rest}}
-	end.
+	end;
+read_message(NetType,Bin) -> {error, incomplete, {NetType, Bin}}.
 
 parse_version(<<MyProtocolVersion:32/little, MyServices:64/little, Timestamp:64/little, AddrRecv:26/binary, Rest/binary>>) ->
 	MyServicesType = parse_services(MyServices),
@@ -45,8 +47,7 @@ version(NetType, {PeerAddress, PeerPort, PeerServicesType, PeerProtocolVersion},
 	% time field is not present in version message.
 	<<_:32, AddrRecv/binary>> = net_addr(PeerAddress, PeerPort, {PeerServicesType, PeerProtocolVersion}),
 	<<_:32, AddrFrom/binary>> = net_addr(MyAddress, MyPort,   {MyServicesType, MyProtocolVersion}),
-	% 2^64
-	Nonce = rand:uniform(18446744073709551616)-1,
+	Nonce = nonce64(),
 	UserAgent = var_str(StrUserAgent),
 	Relay = case RelayQ of
 		true  -> 1;
@@ -66,6 +67,17 @@ version(NetType, {PeerAddress, PeerPort, PeerServicesType, PeerProtocolVersion},
 	message(NetType, version, Payload).
 
 verack(NetType) -> message(NetType, verack, <<>>).
+
+parse_verack(<<>>) -> ok.
+
+ping(NetType) ->
+	Nonce = nonce64,
+	message(NetType, ping, <<Nonce:64/little>>).
+
+parse_ping(<<Nonce:64/little>>) -> Nonce.
+
+pong(NetType, Nonce) -> message(NetType, pong, <<Nonce:64/little>>).
+
 
 addr(NetType, PeerAddresses, ProtocolVersion) ->
 	Count = var_int(length(PeerAddresses)),
@@ -115,6 +127,10 @@ inv_vect(ObjectType, Hash) ->
 	Type = object_type(ObjectType),
 	<<Type:32/little, Hash:32/binary>>.
 
+parse_inv_vect(<<Type:32/little, Hash:32/binary>>) ->
+	ObjectType = parse_object_type(Type),
+	{ObjectType, Hash}.
+
 read_alert(<<Version:32/little, RelayUntil:64/little, Expiration:64/little, ID:32/little, Cancel:32/little, Rest/binary>>) ->
 	%setCancel set<int32_t>
 	{Length,Rest1} = read_var_int(Rest),
@@ -134,7 +150,61 @@ read_alert(Props, <<MinVer:32/little, MaxVer:32/little, Rest/binary>>) ->
 	{list_to_tuple(Props++[MinVer, MaxVer, ListSubVers, Priority, Comment, StatusBar, Reserved]), Rest6}.
 
 
+parse_getblocks(<<Version:32/little, Rest/binary>>) ->
+	{_HashCount, Rest1} = read_var_int(Rest),
+	RHashes = lists:reverse(partition(binary_to_list(Rest1), 32)),
+	{Version, [list_to_binary(L) || L <-lists:reverse(tl(RHashes))], list_to_binary(hd(RHashes))}.
 
+parse_getheaders(Bin) -> parse_getblocks(Bin).
+
+parse_tx(<<Version:32/little-signed, 0, 1, Rest/binary>>) -> parse_tx(Version, true, Rest);
+parse_tx(<<Version:32/little-signed, Rest/binary>>) -> parse_tx(Version, false, Rest).
+
+parse_tx(Version, _HasWitnessQ, Rest) ->
+	{TxInCount, Rest1} = read_var_int(Rest),
+	{TxIns, Rest2} = read_tx_in_n(Rest1, TxInCount),
+	{TxOutCount, Rest3} = read_var_int(Rest2),
+	{TxOuts, Rest3} = read_tx_out_n(Rest2, TxOutCount),
+	%TxWitnessCount = case HasWitnessQ of
+	%	true -> TxInCount;
+	%	false -> 0
+	%end,
+	%{TxWitnesses, Rest4} = read_tx_witness_n(Rest3, TxWitnessCount),
+	<<LockTime:32/little>> = Rest3,
+	%{Version, TxIns, TxOuts, TxWitnesses, LockTime}.
+	{Version, TxIns, TxOuts, LockTime}.
+
+read_tx_in_n(Bin, N) -> read_tx_in_n([], N, Bin).
+
+read_tx_in_n(Acc, 0, Bin) -> {lists:reverse(Acc), Bin};
+read_tx_in_n(Acc, N, Bin) when is_integer(N), N>0 ->
+	<<PreviousOutput:36/binary, Rest/binary>> = Bin,
+	{ScriptLength, Rest1} = read_var_int(Rest),
+	<<SignatureScript:ScriptLength/binary, Rest2>> = Rest1,
+	<<Sequence:32/little, Rest3/binary>> = Rest2,
+	read_tx_in_n([{parse_outpoint(PreviousOutput), SignatureScript, Sequence}|Acc], N-1, Rest3).
+
+parse_outpoint(<<Hash:32/binary, Index:32/little>>) -> {Hash, Index}.
+
+read_tx_out_n(Bin, N) -> read_tx_out_n([], N, Bin).
+
+read_tx_out_n(Acc, 0, Bin) -> {lists:reverse(Acc), Bin};
+read_tx_out_n(Acc, N, Bin) when is_integer(N), N>0 ->
+	<<Value:64/little, Rest>> = Bin,
+	{PkScriptLength, Rest1} = read_var_int(Rest),
+	<<PkScript:PkScriptLength/binary, Rest2>> = Rest1,
+	read_tx_out_n([{Value, PkScript}|Acc], N-1, Rest2).
+
+read_block_header(<<Version:32/little, PrevBlock:32/binary, MerkleRoot:32/binary, Timestamp:32/little, Bits:32/little, Nonce:32/little, Rest/binary>>) ->
+	{TxnCount, Rest1} = read_var_int(Rest),
+	{{Version, PrevBlock, MerkleRoot, Timestamp, Bits, Nonce, TxnCount}, Rest1}.
+
+read_block_header_n(Bin, N) -> read_block_header_n([], N, Bin).
+
+read_block_header_n(Acc, 0, Bin) -> {lists:reverse(Acc), Bin};
+read_block_header_n(Acc, N, Bin) when is_integer(N), N>0 ->
+	{BlockHeader, Rest} = read_block_header(Bin),
+	read_block_header_n([BlockHeader|Acc], N-1, Rest).
 
 services(ServicesType) ->
 	case ServicesType of
@@ -173,6 +243,15 @@ object_type(ObjectType) ->
 		msg_cmpct_block    -> 4
 	end.
 
+parse_object_type(Type) ->
+	case Type of
+		0 -> error;
+		1 -> msg_tx;
+		2 -> msg_block;
+		3 -> msg_filtered_block;
+		4 -> msg_cmpct_block
+	end.
+
 % CompactSize
 var_int(X) when X <  16#FD -> <<X>>;
 var_int(X) when X =< 16#FFFF -> <<16#FD, X:16/little>>;
@@ -197,14 +276,14 @@ read_var_str(Bin) ->
 read_var_str_n(Bin, N) -> read_var_str_n([], N, Bin).
 
 read_var_str_n(Acc, 0, Bin) -> {lists:reverse(Acc), Bin};
-read_var_str_n(Acc, N, Bin) when is_integer(N) ->
+read_var_str_n(Acc, N, Bin) when is_integer(N), N>0 ->
 	{Str, Rest} = read_var_str(Bin),
 	read_var_str_n([Str|Acc], N-1, Rest).
 
 read_int32_n(Bin, N) -> read_int32_n([], N, Bin).
 
 read_int32_n(Acc, 0, Bin) -> {lists:reverse(Acc), Bin};
-read_int32_n(Acc, N, Bin) when is_integer(N) ->
+read_int32_n(Acc, N, Bin) when is_integer(N), N>0 ->
 	<<Int:32/little, Rest/binary>> = Bin,
 	read_int32_n([Int|Acc], N-1, Rest).
 
@@ -254,6 +333,10 @@ partition(N, N, L, Acc) ->
 partition(N, X, [H|T], Acc) ->
 	partition(N, X+1, T, [H|Acc]).
 
+
+nonce64() ->
+	% 2^64
+	rand:uniform(18446744073709551616)-1.
 
 
 -ifdef(EUNIT).

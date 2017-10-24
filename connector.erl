@@ -7,7 +7,7 @@
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
--record(state, {peer_infos, socket, peer_port, my_port}).
+-record(state, {net_type, peer_infos, socket, peer_address, peer_port, my_address, my_port, buf}).
 
 
 %% API
@@ -18,51 +18,35 @@ stop() ->
 	gen_server:stop(?MODULE).
 
 connect() ->
-	gen_server:call(?MODULE, connect).
+	gen_server:cast(?MODULE, connect).
 
 
 %% callbacks
 init([]) ->
-	PeerPort = port(regtest)+1,
-	MyPort = port(regtest),
+	NetType = regtest,
+	PeerAddress = {127,0,0,1},
+	PeerPort = port(NetType)+1, %bitcoind -regtest -port=xxxx -daemon
+	MyAddress = {127,0,0,1},
+	MyPort = port(NetType),
+	
 	listener:start_link(MyPort),
-	{ok, #state{peer_infos=[], peer_port=PeerPort, my_port=MyPort}}.
+	{ok, #state{net_type=NetType, peer_infos=[], peer_address=PeerAddress, peer_port=PeerPort, my_address=MyAddress, my_port=MyPort}}.
 
-% version(NetType, {PeerAddress, PeerPort, PeerServicesType, PeerProtocolVersion}, {MyAddress, MyPort, MyServicesType, MyProtocolVersion}, StrUserAgent, StartBlockHeight, RelayQ)
-handle_call(connect, _From, S) ->
+handle_call(_Request, _From, S) -> {reply, ok, S}.
+
+
+handle_cast(connect, S) ->
 	PeerInfos = if
 		S#state.peer_infos =:= [] -> seeder:seeds();
 		S#state.peer_infos =/= [] -> S#state.peer_infos
 	end,
-	%PeerAddress = hd(PeerInfos),
-	PeerAddress = {127,0,0,1},
+	PeerAddress = S#state.peer_address,
 	PeerPort = S#state.peer_port,
-	%MyAddress = {202,218,2,35},
-	MyAddress = {127,0,0,1},
-	MyPort = S#state.my_port,
 	io:format("connecting to ~p:~p...~n",[PeerAddress, PeerPort]),
-	Message = protocol:version(regtest, {PeerAddress, PeerPort, node_network, 60002}, {MyAddress, MyPort, node_network, 60002}, "/Moles:0.0.1/", 0, false),
 	{ok, Socket} = gen_tcp:connect(PeerAddress, PeerPort, [binary, {packet,0}, {active, false}]),
-	ok = gen_tcp:send(Socket, Message),
-	R = case gen_tcp:recv(Socket, 0, 2000) of
-		{ok, Packet} -> Packet;
-		{error, Reason} -> io:format("error ~p~n",[Reason]),<<>>
-	end,
-	io:format("Packet = ~p~n",[protocol:read_message(R)]),
-
-	ok = gen_tcp:send(Socket, protocol:verack(regtest)),
-	{ok, Packet2} = gen_tcp:recv(Socket, 0, 2000),
-	io:format("Packet = ~p~n",[protocol:read_message(Packet2)]),
-
-	
-	ok = gen_tcp:close(Socket),
-	% TODO: update S
-	{reply, ok, S};
-handle_call(_Request, _From, State) ->
-	{reply, ignored, State}.
-
-handle_cast(_Msg, State) ->
-	{noreply, State}.
+	S1 = S#state{ socket = Socket, buf = [] },
+	{ok, S2} = handshake(S1),
+	loop(S2).
 
 handle_info(_Info, State) ->
 	{noreply, State}.
@@ -75,6 +59,69 @@ code_change(_OldVsn, State, _Extra) ->
 	{ok, State}.
 
 %% Internal functions
+
+handshake(S) ->
+	NetType = S#state.net_type,
+	Socket = S#state.socket,
+	PeerAddress = S#state.peer_address,
+	PeerPort = S#state.peer_port,
+	MyAddress = S#state.my_address,
+	MyPort = S#state.my_port,
+
+	Message = protocol:version(NetType, {PeerAddress, PeerPort, node_network, 60002}, {MyAddress, MyPort, node_network, 60002}, "/Moles:0.0.1/", 0, false),
+	ok = gen_tcp:send(Socket, Message),
+	{ok, Packet } = gen_tcp:recv(Socket, 0, 2000),
+	{ok, {NetType, version, Payload, Rest}} = protocol:read_message(Packet),
+	io:format("Packet (version) = ~p~n",[protocol:parse_version(Payload)]),
+
+	{ok, {NetType, verack, Payload1, Rest1}} = protocol:read_message(Rest),
+	io:format("Packet (verack) = ~p~n",[protocol:parse_verack(Payload1)]),
+	
+	ok = gen_tcp:send(Socket, protocol:verack(regtest)),
+	ok = inet:setopts(Socket, [{active, once}]),
+	{ok, S#state{buf=Rest1}}.
+
+% command loop
+loop(S) ->
+	Packet = S#state.buf,
+	case protocol:read_message(Packet) of
+		{ok, {_NetType, Command, Payload, Rest}} ->
+			case Command of
+				verack ->
+					io:format("Packet (verack) = ~p~n", [protocol:parse_verack(Payload)]);
+				ping ->
+					Nonce = protocol:parse_ping(Payload),
+					io:format("Packet (ping) = ~p~n", [Nonce]),
+					gen_tcp:send(S#state.socket, protocol:pong(S#state.net_type, Nonce));
+				getheaders ->
+					io:format("Packet (getheaders) = ~p~n", [protocol:parse_getheaders(Payload)]);
+				alert ->
+					io:format("Packet (alert) = ~p~n", [Payload])
+			end;
+		{error, empty} -> Rest = <<>>;
+		{error, checksum, {_NetType, Rest}}->
+			throw(checksum);
+		{error, incomplete, {_NetType, Rest}}->
+			io:format("Warning: message incomplete~n",[])
+	end,
+	if
+		Rest =/= <<>> -> loop(S#state{buf=Rest});
+		Rest =:= <<>> ->
+			receive
+				{tcp, _Socket, Packet1} ->
+					inet:setopts(S#state.socket, [{active, once}]),
+					loop(S#state{buf = <<Rest/binary,Packet1/binary>>});
+				{tcp_closed, _Socket} ->
+					stop(tcp_closed, S#state{buf=Rest});
+				{tcp_error, _Socket, Reason} ->
+					stop({tcp_error, Reason}, S#state{buf=Rest})
+			end
+	end.
+
+stop(Reason, S) ->
+	gen_tcp:close(S#state.socket),
+	{stop, Reason, S}.
+
 port(mainnet) ->  8333;
 port(testnet) -> 18333;
 port(regtest) -> 18444.
