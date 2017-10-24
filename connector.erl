@@ -27,11 +27,20 @@ connect() ->
 
 %% callbacks
 init([]) ->
-	NetType = regtest,
-	PeerAddress = {127,0,0,1},
-	PeerPort = port(NetType)+1, %bitcoind -regtest -port=xxxx -daemon
-	MyAddress = {127,0,0,1},
+	% regtest setups
+	%NetType = regtest,
+	%PeerAddress = {127,0,0,1},
+	%PeerPort = port(NetType)+1, %bitcoind -regtest -port=xxxx -daemon
+	%MyAddress = {127,0,0,1},
+	%MyPort = port(NetType),
+	
+	% testnet setups
+	NetType = testnet,
+	PeerAddress = {0,0,0,0},
+	PeerPort = port(NetType),
+	MyAddress = {202,218,2,35},
 	MyPort = port(NetType),
+	
 	MyProtocolVersion = 60002,
 	
 	listener:start_link(MyPort),
@@ -45,7 +54,8 @@ handle_cast(connect, S) ->
 		S#state.peer_infos =:= [] -> seeder:seeds();
 		S#state.peer_infos =/= [] -> S#state.peer_infos
 	end,
-	PeerAddress = S#state.peer_address,
+	%PeerAddress = S#state.peer_address,
+	PeerAddress = hd(PeerInfos),
 	PeerPort = S#state.peer_port,
 	io:format("connecting to ~p:~p...~n",[PeerAddress, PeerPort]),
 	{ok, Socket} = gen_tcp:connect(PeerAddress, PeerPort, [binary, {packet,0}, {active, false}]),
@@ -77,15 +87,15 @@ handshake(S) ->
 
 	Message = protocol:version(NetType, {PeerAddress, PeerPort, node_network, PeerProtocolVersion}, {MyAddress, MyPort, node_network, MyProtocolVersion}, "/Moles:0.0.1/", 0, false),
 	ok = gen_tcp:send(Socket, Message),
-	{ok, Packet } = gen_tcp:recv(Socket, 0, 2000),
+	{ok, Packet } = gen_tcp:recv(Socket, 0, 10*1000),
 	{ok, {NetType, version, Payload, Rest}} = protocol:read_message(Packet),
 	io:format("Packet (version) = ~p~n",[protocol:parse_version(Payload)]),
 
 	{ok, {NetType, verack, Payload1, Rest1}} = protocol:read_message(Rest),
 	io:format("Packet (verack) = ~p~n",[protocol:parse_verack(Payload1)]),
 	
-	ok = gen_tcp:send(Socket, protocol:verack(regtest)),
-ok = gen_tcp:send(Socket, protocol:getblocks(regtest, {MyProtocolVersion, [?REGTEST_GENESIS_BLOCK_HASH], ?HASH0})),
+	ok = gen_tcp:send(Socket, protocol:verack(S#state.net_type)),
+ok = gen_tcp:send(Socket, protocol:getheaders(S#state.net_type, {MyProtocolVersion, [?REGTEST_GENESIS_BLOCK_HASH], ?HASH0})),
 	ok = inet:setopts(Socket, [{active, once}]),
 	{ok, S#state{buf=Rest1}}.
 
