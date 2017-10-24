@@ -153,7 +153,7 @@ read_alert(Props, <<MinVer:32/little, MaxVer:32/little, Rest/binary>>) ->
 parse_getblocks(<<Version:32/little, Rest/binary>>) ->
 	{_HashCount, Rest1} = read_var_int(Rest),
 	RHashes = lists:reverse(partition(binary_to_list(Rest1), 32)),
-	{Version, [list_to_binary(L) || L <-lists:reverse(tl(RHashes))], list_to_binary(hd(RHashes))}.
+	{Version, [parse_hash(list_to_binary(L)) || L <-lists:reverse(tl(RHashes))], parse_hash(list_to_binary(hd(RHashes)))}.
 
 parse_getheaders(Bin) -> parse_getblocks(Bin).
 
@@ -301,6 +301,7 @@ bin12_to_atom(Bin12) ->
 
 dhash(Bin) -> crypto:hash(sha256, crypto:hash(sha256, Bin)).
 
+parse_hash(<<Hash:32/binary>>) -> bin_to_hexstr(Hash).
 
 unix_timestamp() ->
 	{Mega, Secs, _} = erlang:timestamp(),
@@ -310,9 +311,10 @@ unix_timestamp() ->
 bin_to_hexstr(Bin) -> bin_to_hexstr(Bin,"").
 
 bin_to_hexstr(Bin,Sep) ->
-  string:join([io_lib:format("~2.16.0B", [X]) ||
-      X <- binary_to_list(Bin)], Sep).
+  lists:flatten(string:join([io_lib:format("~2.16.0B", [X]) ||
+      X <- binary_to_list(Bin)], Sep)).
 
+hexstr_to_bin("") -> <<>>;
 hexstr_to_bin(Str) ->
 	T = partition(Str, 2),
 	list_to_binary([list_to_integer(S,16) || S <- T]).
@@ -341,43 +343,43 @@ nonce64() ->
 
 -ifdef(EUNIT).
 
-var_str_test() ->
+var_str_test_() ->
 	[
 		?_assertEqual(var_str(""), <<0>>),
 		?_assertEqual(var_str("ABC"), <<3,"ABC">>)
 	].
 
-atom_to_bin12_test() ->
+atom_to_bin12_test_() ->
 	[
 		?_assertEqual(atom_to_bin12(version), <<"version","\0\0\0\0\0">>)
 	].
 
-bin12_to_atom_test() ->
+bin12_to_atom_test_() ->
 	[
 		?_assertEqual(bin12_to_atom(atom_to_bin12(version)), version)
 	].
 
-bin_to_hexstr_test() ->
+bin_to_hexstr_test_() ->
 	[
 		?_assertEqual(bin_to_hexstr(<<>>), ""),
 		?_assertEqual(bin_to_hexstr(<<1,2,3,16#FF>>), "010203FF"),
 		?_assertEqual(bin_to_hexstr(<<1,2,3,16#FF>>, " "), "01 02 03 FF")
 	].
 
-hexstr_to_bin_test() ->
+hexstr_to_bin_test_() ->
 	[
 		?_assertEqual(hexstr_to_bin(""), <<>>),
 		?_assertEqual(hexstr_to_bin(bin_to_hexstr(<<1,2,3,16#FF>>)), <<1,2,3,16#FF>>),
 		?_assertEqual(hexstr_to_bin(bin_to_hexstr(<<1,2,3,16#FF>>, " "), " "), <<1,2,3,16#FF>>)
 	].
 
-read_var_int_test() ->
+read_var_int_test_() ->
 	[
 		?_assertEqual(read_var_int(var_int(0)), {0,<<>>}),
 		?_assertEqual(read_var_int(var_int(16#FF)), {16#FF,<<>>})
 	].
 
-read_var_str_test() ->
+read_var_str_test_() ->
 	[
 		?_assertEqual(read_var_str(var_str("")), {"",<<>>}),
 		?_assertEqual(read_var_str(var_str("ABC")), {"ABC",<<>>})
