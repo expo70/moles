@@ -85,7 +85,7 @@ handshake(S) ->
 	io:format("Packet (verack) = ~p~n",[protocol:parse_verack(Payload1)]),
 	
 	ok = gen_tcp:send(Socket, protocol:verack(regtest)),
-ok = gen_tcp:send(Socket, protocol:getheaders(regtest, {MyProtocolVersion, [?REGTEST_GENESIS_BLOCK_HASH], ?HASH0})),
+ok = gen_tcp:send(Socket, protocol:getblocks(regtest, {MyProtocolVersion, [?REGTEST_GENESIS_BLOCK_HASH], ?HASH0})),
 	ok = inet:setopts(Socket, [{active, once}]),
 	{ok, S#state{buf=Rest1}}.
 
@@ -111,6 +111,8 @@ loop(S) ->
 					io:format("Packet (headers) = ~p~n", [protocol:parse_headers(Payload)]);
 				blocks ->
 					io:format("Packet (blocks) = ~p~n", [protocol:parse_blocks(Payload)]);
+				inv ->
+					io:format("Packet (inv) = ~p~n", [protocol:parse_inv(Payload)]);
 				reject ->
 					io:format("Packet (reject) = ~p~n", [protocol:parse_reject(Payload)]);
 				alert ->

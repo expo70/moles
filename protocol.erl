@@ -128,14 +128,30 @@ parse_net_addr(Time, <<Services:64/little, IP6Address:16/binary, Port:16/big>>) 
 	end,
 	{IPAddress, Port, ServicesType, Time}.
 
+%% inv_vect
 inv_vect(ObjectType, Hash) ->
 	Type = object_type(ObjectType),
 	<<Type:32/little, Hash:32/binary>>.
 
-parse_inv_vect(<<Type:32/little, Hash:32/binary>>) ->
+read_inv_vect(<<Type:32/little, Hash:32/binary, Rest/binary>>) ->
 	ObjectType = parse_object_type(Type),
-	{ObjectType, parse_hash(Hash)}.
+	{{ObjectType, parse_hash(Hash)}, Rest}.
 
+read_inv_vect_n(Bin, N) -> read_inv_vect_n([], N, Bin).
+
+read_inv_vect_n(Acc, 0, Bin) -> {lists:reverse(Acc), Bin};
+read_inv_vect_n(Acc, N, Bin) when is_integer(N), N>0 ->
+	{InvVect, Rest} = read_inv_vect(Bin),
+	read_inv_vect_n([InvVect|Acc], N-1, Rest).
+
+%% inv message
+parse_inv(Bin) ->
+	{Count, Rest} = read_var_int(Bin),
+	{InvVects, _Rest1} = read_inv_vect_n(Rest, Count),
+	InvVects.
+
+
+%% alert message
 read_alert(<<Version:32/little, RelayUntil:64/little, Expiration:64/little, ID:32/little, Cancel:32/little, Rest/binary>>) ->
 	%setCancel set<int32_t>
 	{Length,Rest1} = read_var_int(Rest),
@@ -154,6 +170,7 @@ read_alert(Props, <<MinVer:32/little, MaxVer:32/little, Rest/binary>>) ->
 	{Reserved, Rest6} = read_var_str(Rest5),
 	{list_to_tuple(Props++[MinVer, MaxVer, ListSubVers, Priority, Comment, StatusBar, Reserved]), Rest6}.
 
+%% getblocks message
 getblocks(NetType, {ProtocolVersion, Hashes, HashStop}) ->
 	HashCount = var_int(length(Hashes)),
 	HashesBin = [hash(H) || H <- Hashes],
@@ -166,6 +183,8 @@ parse_getblocks(<<ProtocolVersion:32/little, Rest/binary>>) ->
 	RHashes = lists:reverse(partition(binary_to_list(Rest1), 32)),
 	{ProtocolVersion, [parse_hash(list_to_binary(L)) || L <-lists:reverse(tl(RHashes))], parse_hash(list_to_binary(hd(RHashes)))}.
 
+
+%% getheaders message
 %NOTE: similar to getblocks()
 getheaders(NetType, {ProtocolVersion, Hashes, HashStop}) ->
 	HashCount = var_int(length(Hashes)),
@@ -176,6 +195,8 @@ getheaders(NetType, {ProtocolVersion, Hashes, HashStop}) ->
 
 parse_getheaders(Bin) -> parse_getblocks(Bin).
 
+
+%% Tx
 read_tx(<<Version:32/little-signed, 0, 1, Rest/binary>>) -> read_tx(Version, true, Rest);
 read_tx(<<Version:32/little-signed, Rest/binary>>) -> read_tx(Version, false, Rest).
 
@@ -193,7 +214,6 @@ read_tx(Version, _HasWitnessQ, Rest) ->
 	%{Version, TxIns, TxOuts, TxWitnesses, LockTime}.
 	{{Version, TxIns, TxOuts, LockTime}, Rest4}.
 
-%% Tx
 read_tx_n(Bin, N) -> read_tx_n([], N, Bin).
 
 read_tx_n(Acc, 0, Bin) -> {lists:reverse(Acc), Bin};
@@ -259,21 +279,21 @@ read_block_header_n(Acc, N, Bin) when is_integer(N), N>0 ->
 	read_block_header_n([BlockHeader|Acc], N-1, Rest).
 
 
-%% Headers message
+%% headers message
 parse_headers(Bin) ->
 	{Count, Rest} = read_var_int(Bin),
 	{Headers, _Rest1} = read_block_header_n(Rest, Count),
 	Headers.
 
 
-%% Blocks message
+%% blocks message
 parse_blocks(Bin) ->
 	{Count, Rest} = read_var_int(Bin),
 	{Blocks, _Rest1} = read_block_n(Rest, Count),
 	Blocks.
 
 
-%% Reject message
+%% reject message
 parse_reject(Bin) ->
 	{MessageType, Rest} = read_var_str(Bin),
 	<<CCode, Rest1/binary>> = Rest,
