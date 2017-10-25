@@ -24,13 +24,13 @@ read_message(NetType,Bin) -> {error, incomplete, {NetType, Bin}}.
 
 parse_version(<<MyProtocolVersion:32/little, MyServices:64/little, Timestamp:64/little, AddrRecv:26/binary, Rest/binary>>) ->
 	MyServicesType = parse_services(MyServices),
-	{PeerAddress, PeerPort, PeerServicesType, Time} = parse_net_addr(AddrRecv),
+	{Time, PeerServicesType, PeerAddress, PeerPort} = parse_net_addr(AddrRecv),
 	parse_version1({{MyServicesType, MyProtocolVersion}, Timestamp, {PeerAddress, PeerPort}, PeerServicesType, Time}, Rest).
 
 parse_version1(B1, <<>>) -> {B1,{},{}};
 parse_version1(B1, Rest) ->
 	<<AddrFrom:26/binary, Nonce:64/little, Rest1/binary>> = Rest,
-	{MyAddress, MyPort, MyServicesType, Time} = parse_net_addr(AddrFrom),
+	{Time, MyServicesType, MyAddress, MyPort} = parse_net_addr(AddrFrom),
 	{StrUserAgent, Rest2} = read_var_str(Rest1),
 	<<StartBlockHeight:32/little, Rest3/binary>> = Rest2,
 	parse_version2(B1, {{MyAddress, MyPort}, MyServicesType, Time, Nonce, StrUserAgent, StartBlockHeight}, Rest3).
@@ -66,8 +66,14 @@ version(NetType, {PeerAddress, PeerPort, PeerServicesType, PeerProtocolVersion},
 
 	message(NetType, version, Payload).
 
+%% verack message
 verack(NetType) -> message(NetType, verack, <<>>).
 
+%% mempool message
+mempool(NetType, ProtocolVersion) when ProtocolVersion >= 60002 ->
+	message(NetType, mempool, <<>>).
+
+%% sendheaders message
 sendheaders(NetType, ProtocolVersion) when ProtocolVersion >= 70012 ->
 	message(NetType, sendheaders, <<>>).
 
@@ -75,6 +81,7 @@ parse_verack(<<>>) -> ok.
 
 parse_sendheaders(<<>>) -> ok.
 
+%% ping message
 ping(NetType) ->
 	Nonce = nonce64,
 	message(NetType, ping, <<Nonce:64/little>>).
@@ -84,16 +91,6 @@ parse_ping(<<Nonce:64/little>>) -> Nonce.
 pong(NetType, Nonce) -> message(NetType, pong, <<Nonce:64/little>>).
 
 
-addr(NetType, PeerAddresses, ProtocolVersion) ->
-	Count = var_int(length(PeerAddresses)),
-	T = unix_timestamp(),
-	Timestamp = if
-		ProtocolVersion >= 31402 -> <<T:32/little>>;
-		ProtocolVersion <  31402 -> <<>>
-	end,
-	Payload = list_to_binary([Count, Timestamp, PeerAddresses]),
-	
-	message(NetType, addr, Payload).
 
 
 
@@ -108,6 +105,7 @@ message(NetType, Command, Payload) ->
 	<<Magic:32/little, BinCommand/binary, Length:32/little, Checksum/binary, Payload/binary>>.
 
 
+%% net_addr
 net_addr({A,B,C,D}, Port, {ServicesType, MyProtocolVersion}) ->
 	Time = unix_timestamp(),
 	Services = services(ServicesType),
@@ -118,15 +116,39 @@ net_addr({A,B,C,D}, Port, {ServicesType, MyProtocolVersion}) ->
 	end.
 
 parse_net_addr(<<Time:32/little, Rest:(8+16+2)/binary>>) -> parse_net_addr(Time, Rest);
-parse_net_addr(<<Bin:(8+16+2)/binary>>) -> parse_net_addr(0, Bin).
+parse_net_addr(<<Bin:(8+16+2)/binary>>) -> parse_net_addr(null, Bin).
 
-parse_net_addr(Time, <<Services:64/little, IP6Address:16/binary, Port:16/big>>) ->
-	ServicesType = parse_services(Services),
-	IPAddress = case IP6Address of
-		<<0:(8*10), 16#FF, 16#FF, A:8, B:8, C:8, D:8>> -> {A,B,C,D};
-		<<E:16/big, F:16/big, G:16/big, H:16/big, I:16/big, J:16/big, K:16/big, L:16/big>> -> {E,F,G,H,I,J,K,L}
+parse_net_addr(Time, <<Services:64/little, IPAddress:16/binary, Port:16/big>>) ->
+	{Time, parse_services(Services), parse_ip_address(IPAddress), Port}.
+
+read_net_addr(Bin, ProtocolVersion) ->
+	if
+		ProtocolVersion >= 31402 ->
+			<<Time:32/little, Services:64/little, IPAddress:16/binary, Port:16/big, Rest/binary>> = Bin;
+		ProtocolVersion <  31402 ->
+			Time=null,
+			<<Services:64/little, IPAddress:16/binary, Port:16/big, Rest/binary>> = Bin
 	end,
-	{IPAddress, Port, ServicesType, Time}.
+	{{Time, parse_services(Services), parse_ip_address(IPAddress), Port}, Rest}.
+
+read_net_addr_n(Bin, N, ProtocolVersion) -> read_net_addr_n([], N, Bin, ProtocolVersion).
+
+read_net_addr_n(Acc, 0, Bin, _ProtocolVersion) -> {lists:reverse(Acc), Bin};
+read_net_addr_n(Acc, N, Bin, ProtocolVersion) when is_integer(N), N>0 ->
+	{NetAddr, Rest} = read_net_addr(Bin, ProtocolVersion),
+	read_net_addr_n([NetAddr|Acc], N-1, Rest, ProtocolVersion).
+
+%% addr message
+parse_addr(Bin, ProtocolVersion) ->
+	{Count, Rest} = read_var_int(Bin),
+	{NetAddrs, _Rest1} = read_net_addr_n(Rest, Count, ProtocolVersion),
+	NetAddrs.
+
+
+%% IP Address
+parse_ip_address(<<0:(8*10), 16#FF, 16#FF, A, B, C, D>>) -> {A,B,C,D}; %IP4
+parse_ip_address(<<E:16/big, F:16/big, G:16/big, H:16/big, I:16/big, J:16/big, K:16/big, L:16/big>>) -> {E,F,G,H,I,J,K,L}. %IP6
+
 
 %% inv_vect
 inv_vect(ObjectType, Hash) ->

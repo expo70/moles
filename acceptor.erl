@@ -20,7 +20,8 @@ init(ListenSocket) ->
 	%end.
 
 loop(Socket) ->
-	{ok, Packet} = gen_tcp:recv(Socket, 0),
-	io:format("Incoming Pakcet = ~p~n", [protocol:read_message(Packet)]),
+	{ok, Packet} = gen_tcp:recv(Socket, 0, 2000),
+	{NetType, Command, Payload} = protocol:read_message(Packet),
+	io:format("Incoming Pakcet = ~p~n", [protocol:read_version(Payload)]),
 	loop(Socket).
 

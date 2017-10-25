@@ -2,6 +2,7 @@
 
 -define(HASH0, "0000000000000000000000000000000000000000000000000000000000000000").
 -define(REGTEST_GENESIS_BLOCK_HASH, "06226e46111a0b59caaf126043eb5bbf28c34f3a5e332a1fc7b2b73cf188910f").
+-define(TESTNET_GENESIS_BLOCK_HASH, "43497fd7f826957108f4a30fd9cec3aeba79972084e90ead01ea330900000000").
 
 -behaviour(gen_server).
 
@@ -11,7 +12,7 @@
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
--record(state, {net_type, peer_infos, socket, peer_protocol_version, peer_address, peer_port, my_protocol_version, my_address, my_port, buf}).
+-record(state, {net_type, socket, peer_protocol_version, peer_address, peer_port, my_protocol_version, my_address, my_port, buf}).
 
 
 %% API
@@ -44,18 +45,14 @@ init([]) ->
 	MyProtocolVersion = 60002,
 	
 	listener:start_link(MyPort),
-	{ok, #state{net_type=NetType, peer_infos=[], peer_address=PeerAddress, peer_port=PeerPort, peer_protocol_version=0, my_address=MyAddress, my_port=MyPort, my_protocol_version=MyProtocolVersion}}.
+	{ok, #state{net_type=NetType, peer_address=PeerAddress, peer_port=PeerPort, peer_protocol_version=0, my_address=MyAddress, my_port=MyPort, my_protocol_version=MyProtocolVersion}}.
 
 handle_call(_Request, _From, S) -> {reply, ok, S}.
 
 
 handle_cast(connect, S) ->
-	PeerInfos = if
-		S#state.peer_infos =:= [] -> seeder:seeds();
-		S#state.peer_infos =/= [] -> S#state.peer_infos
-	end,
 	%PeerAddress = S#state.peer_address,
-	PeerAddress = hd(PeerInfos),
+	PeerAddress = hd(seeder:seeds()),
 	PeerPort = S#state.peer_port,
 	io:format("connecting to ~p:~p...~n",[PeerAddress, PeerPort]),
 	{ok, Socket} = gen_tcp:connect(PeerAddress, PeerPort, [binary, {packet,0}, {active, false}]),
@@ -91,28 +88,26 @@ handshake(S) ->
 	{ok, {NetType, version, Payload, Rest}} = protocol:read_message(Packet),
 	io:format("Packet (version) = ~p~n",[protocol:parse_version(Payload)]),
 
-	{ok, {NetType, verack, Payload1, Rest1}} = protocol:read_message(Rest),
-	io:format("Packet (verack) = ~p~n",[protocol:parse_verack(Payload1)]),
-	
-	ok = gen_tcp:send(Socket, protocol:verack(S#state.net_type)),
-ok = gen_tcp:send(Socket, protocol:getheaders(S#state.net_type, {MyProtocolVersion, [?REGTEST_GENESIS_BLOCK_HASH], ?HASH0})),
+	ok = gen_tcp:send(Socket, protocol:verack(NetType)),
 	ok = inet:setopts(Socket, [{active, once}]),
-	{ok, S#state{buf=Rest1}}.
+	{ok, S#state{buf=Rest}}.
 
 % command loop
 loop(S) ->
 	Packet = S#state.buf,
 	case protocol:read_message(Packet) of
-		{ok, {_NetType, Command, Payload, Rest}} ->
+		{ok, {NetType, Command, Payload, Rest}} ->
 			case Command of
 				verack ->
-					io:format("Packet (verack) = ~p~n", [protocol:parse_verack(Payload)]);
+					io:format("Packet (verack) = ~p~n", [protocol:parse_verack(Payload)]),
+%ok = gen_tcp:send(Socket, protocol:getheaders(S#state.net_type, {MyProtocolVersion, [genesis_block_hash(NetType)], ?HASH0})),
+ok = gen_tcp:send(S#state.socket, protocol:mempool(NetType, S#state.my_protocol_version));
 				ping ->
 					Nonce = protocol:parse_ping(Payload),
 					io:format("Packet (ping) = ~p~n", [Nonce]),
 					gen_tcp:send(S#state.socket, protocol:pong(S#state.net_type, Nonce));
 				addr ->
-					io:format("Packet (addr) = ~p~n", [Payload]);
+					io:format("Packet (addr) = ~p~n", [protocol:parse_addr(Payload,S#state.my_protocol_version)]);
 				getheaders ->
 					io:format("Packet (getheaders) = ~p~n", [protocol:parse_getheaders(Payload)]);
 				sendheaders ->
@@ -157,4 +152,5 @@ port(mainnet) ->  8333;
 port(testnet) -> 18333;
 port(regtest) -> 18444.
 
-
+genesis_block_hash(regtest) -> ?REGTEST_GENESIS_BLOCK_HASH;
+genesis_block_hash(testnet) -> ?TESTNET_GENESIS_BLOCK_HASH.
