@@ -71,6 +71,9 @@ version(NetType, {PeerAddress, PeerPort, PeerServicesType, PeerProtocolVersion},
 %% verack message
 verack(NetType) -> message(NetType, verack, <<>>).
 
+%% getaddr message
+getaddr(NetType) -> message(NetType, getaddr, <<>>).
+
 %% mempool message
 mempool(NetType, ProtocolVersion) when ProtocolVersion >= 60002 ->
 	message(NetType, mempool, <<>>).
@@ -153,8 +156,9 @@ parse_ip_address(<<E:16/big, F:16/big, G:16/big, H:16/big, I:16/big, J:16/big, K
 
 
 %% inv_vect
-inv_vect(ObjectType, Hash) ->
+inv_vect({ObjectType, HashStr}) ->
 	Type = object_type(ObjectType),
+	Hash = hash(HashStr),
 	<<Type:32/little, Hash:32/binary>>.
 
 read_inv_vect(<<Type:32/little, Hash:32/binary, Rest/binary>>) ->
@@ -173,6 +177,14 @@ parse_inv(Bin) ->
 	{Count, Rest} = read_var_int(Bin),
 	{InvVects, _Rest1} = read_inv_vect_n(Rest, Count),
 	InvVects.
+
+%% getdata message
+getdata(NetType, InvVects) when is_list(InvVects) ->
+	CountBin = var_int(length(InvVects)),
+	InvVectsBin = list_to_binary([inv_vect(I) || I <- InvVects]),
+	Payload = <<CountBin/binary, InvVectsBin/binary>>,
+	
+	message(NetType, getdata, Payload).
 
 
 %% alert message
@@ -228,15 +240,10 @@ read_tx(Version, _HasWitnessQ, Rest) ->
 	{TxInCount, Rest1} = read_var_int(Rest),
 	{TxIns, Rest2} = read_tx_in_n(Rest1, TxInCount),
 	{TxOutCount, Rest3} = read_var_int(Rest2),
-	{TxOuts, Rest3} = read_tx_out_n(Rest2, TxOutCount),
-	%TxWitnessCount = case HasWitnessQ of
-	%	true -> TxInCount;
-	%	false -> 0
-	%end,
-	%{TxWitnesses, Rest4} = read_tx_witness_n(Rest3, TxWitnessCount),
-	<<LockTime:32/little, Rest4/binary>> = Rest3,
-	%{Version, TxIns, TxOuts, TxWitnesses, LockTime}.
-	{{Version, TxIns, TxOuts, LockTime}, Rest4}.
+	{TxOuts, Rest4} = read_tx_out_n(Rest3, TxOutCount),
+	<<LockTime:32/little, Rest5/binary>> = Rest4,
+
+	{{Version, TxIns, TxOuts, LockTime}, Rest5}.
 
 read_tx_n(Bin, N) -> read_tx_n([], N, Bin).
 
@@ -247,15 +254,16 @@ read_tx_n(Acc, N, Bin) when is_integer(N), N>0 ->
 
 
 %% TxIn
-read_tx_in_n(Bin, N) -> read_tx_in_n([], N, Bin).
+read_tx_in_n(Bin, N) ->
+	read_tx_in_n([], N, Bin).
 
 read_tx_in_n(Acc, 0, Bin) -> {lists:reverse(Acc), Bin};
 read_tx_in_n(Acc, N, Bin) when is_integer(N), N>0 ->
 	<<PreviousOutput:36/binary, Rest/binary>> = Bin,
 	{ScriptLength, Rest1} = read_var_int(Rest),
-	<<SignatureScript:ScriptLength/binary, Rest2>> = Rest1,
+	<<SignatureScript:ScriptLength/binary, Rest2/binary>> = Rest1,
 	<<Sequence:32/little, Rest3/binary>> = Rest2,
-	read_tx_in_n([{parse_outpoint(PreviousOutput), SignatureScript, Sequence}|Acc], N-1, Rest3).
+	read_tx_in_n([{parse_outpoint(PreviousOutput), bin_to_hexstr(SignatureScript), Sequence}|Acc], N-1, Rest3).
 
 %% Outpoint
 parse_outpoint(<<Hash:32/binary, Index:32/little>>) -> {parse_hash(Hash), Index}.
@@ -265,10 +273,10 @@ read_tx_out_n(Bin, N) -> read_tx_out_n([], N, Bin).
 
 read_tx_out_n(Acc, 0, Bin) -> {lists:reverse(Acc), Bin};
 read_tx_out_n(Acc, N, Bin) when is_integer(N), N>0 ->
-	<<Value:64/little, Rest>> = Bin,
+	<<Value:64/little, Rest/binary>> = Bin,
 	{PkScriptLength, Rest1} = read_var_int(Rest),
-	<<PkScript:PkScriptLength/binary, Rest2>> = Rest1,
-	read_tx_out_n([{Value, PkScript}|Acc], N-1, Rest2).
+	<<PkScript:PkScriptLength/binary, Rest2/binary>> = Rest1,
+	read_tx_out_n([{Value, parse_script(PkScript)}|Acc], N-1, Rest2).
 
 %% Block
 read_block(Bin) ->
@@ -352,6 +360,7 @@ services(Acc, []) -> Acc;
 services(Acc, [H|T]) ->
 	case H of
 		node_none    -> services(Acc+0, T);
+
 		node_network -> services(Acc+1, T);
 		node_getutxo -> services(Acc+2, T);
 		node_bloom   -> services(Acc+4, T);
@@ -496,6 +505,116 @@ partition(N, X, [H|T], Acc) ->
 nonce64() ->
 	% 2^64
 	rand:uniform(18446744073709551616)-1.
+
+
+%% Script
+
+parse_script(Bin) ->
+	[parse_op(B) || B <- binary_to_list(Bin)].
+
+parse_op(Byte) ->
+	case Byte of
+		0   -> op_0;
+		76  -> op_pushdata1;
+		77  -> op_pushdata2;
+		78  -> op_pushdata4;
+		79  -> op_1negate;
+		81  -> op_1;
+		82  -> op_2;
+		83  -> op_3;
+		84  -> op_4;
+		85  -> op_5;
+		86  -> op_6;
+		87  -> op_7;
+		88  -> op_8;
+		89  -> op_9;
+		90  -> op_10;
+		91  -> op_11;
+		92  -> op_12;
+		93  -> op_13;
+		94  -> op_14;
+		95  -> op_15;
+		96  -> op_16;
+		97  -> op_nop;
+		99  -> op_if;
+		100 -> op_notif;
+		103 -> op_else;
+		104 -> op_endif;
+		105 -> op_verify;
+		106 -> op_return;
+		107 -> op_toaltstack;
+		108 -> op_fromaltstack;
+		115 -> op_ifdup;
+		116 -> op_depth;
+		117 -> op_drop;
+		118 -> op_dup;
+		119 -> op_nip;
+		120 -> op_over;
+		121 -> op_pick;
+		122 -> op_roll;
+		123 -> op_rot;
+		124 -> op_swap;
+		125 -> op_tuck;
+		109 -> op_2drop;
+		110 -> op_2dup;
+		111 -> op_3dup;
+		112 -> op_2over;
+		113 -> op_2rot;
+		114 -> op_2swap;
+		126 -> op_cat;
+		127 -> op_substr;
+		128 -> op_left;
+		129 -> op_right;
+		130 -> op_size;
+		131 -> op_invert;
+		132 -> op_and;
+		133 -> op_or;
+		134 -> op_xor;
+		135 -> op_equal;
+		136 -> op_equalverify;
+		139 -> op_1add;
+		140 -> op_1sub;
+		141 -> op_2mul;
+		142 -> op_2div;
+		143 -> op_negate;
+		144 -> op_abs;
+		145 -> op_not;
+		146 -> op_0notequal;
+		147 -> op_add;
+		149 -> op_sub;
+		150 -> op_div;
+		151 -> op_mod;
+		152 -> op_lshift;
+		153 -> op_rshift;
+		154 -> op_booland;
+		155 -> op_boolor;
+		156 -> op_numequal;
+		157 -> op_numequalverify;
+		158 -> op_numnotequal;
+		159 -> op_lessthan;
+		160 -> op_greaterthan;
+		161 -> op_lessthanorequal;
+		162 -> op_greaterthanorequal;
+		163 -> op_min;
+		164 -> op_max;
+		165 -> op_within;
+		166 -> op_ripemd160;
+		167 -> op_sha1;
+		168 -> op_sha256;
+		169 -> op_hash160;
+		170 -> op_hash256;
+		171 -> op_codeseparator;
+		172 -> op_checksig;
+		173 -> op_checksigverify;
+		174 -> op_checkmultisig;
+		175 -> op_checkmutisigverify;
+		177 -> op_checklocktimeverify;
+		178 -> op_checksequenceverify;
+		253 -> op_pubkeyhash;
+		254 -> op_pubkey;
+		255 -> op_invalidopcode;
+		Other -> Other
+	end.
 
 
 -ifdef(EUNIT).

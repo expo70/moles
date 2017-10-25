@@ -52,6 +52,8 @@ handle_call(_Request, _From, S) -> {reply, ok, S}.
 
 handle_cast(connect, S) ->
 	%PeerAddress = S#state.peer_address,
+	%PeerAddress = {52,29,69,203},
+	%PeerAddress = {178,21,118,174},
 	PeerAddress = hd(seeder:seeds()),
 	PeerPort = S#state.peer_port,
 	io:format("connecting to ~p:~p...~n",[PeerAddress, PeerPort]),
@@ -85,12 +87,9 @@ handshake(S) ->
 	Message = protocol:version(NetType, {PeerAddress, PeerPort, node_network, PeerProtocolVersion}, {MyAddress, MyPort, node_network, MyProtocolVersion}, "/Moles:0.0.1/", 0, false),
 	ok = gen_tcp:send(Socket, Message),
 	{ok, Packet } = gen_tcp:recv(Socket, 0, 10*1000),
-	{ok, {NetType, version, Payload, Rest}} = protocol:read_message(Packet),
-	io:format("Packet (version) = ~p~n",[protocol:parse_version(Payload)]),
-
-	ok = gen_tcp:send(Socket, protocol:verack(NetType)),
+	
 	ok = inet:setopts(Socket, [{active, once}]),
-	{ok, S#state{buf=Rest}}.
+	{ok, S#state{buf=Packet}}.
 
 % command loop
 loop(S) ->
@@ -98,14 +97,19 @@ loop(S) ->
 	case protocol:read_message(Packet) of
 		{ok, {NetType, Command, Payload, Rest}} ->
 			case Command of
+				version ->
+					io:format("Packet (version) = ~p~n",[protocol:parse_version(Payload)]),
+					ok = gen_tcp:send(S#state.socket, protocol:verack(NetType));
+					
 				verack ->
 					io:format("Packet (verack) = ~p~n", [protocol:parse_verack(Payload)]),
 %ok = gen_tcp:send(Socket, protocol:getheaders(S#state.net_type, {MyProtocolVersion, [genesis_block_hash(NetType)], ?HASH0})),
-ok = gen_tcp:send(S#state.socket, protocol:mempool(NetType, S#state.my_protocol_version));
+%ok = gen_tcp:send(S#state.socket, protocol:mempool(NetType, S#state.my_protocol_version));
+ok = gen_tcp:send(S#state.socket, protocol:getaddr(NetType));
 				ping ->
 					Nonce = protocol:parse_ping(Payload),
 					io:format("Packet (ping) = ~p~n", [Nonce]),
-					gen_tcp:send(S#state.socket, protocol:pong(S#state.net_type, Nonce));
+					ok = gen_tcp:send(S#state.socket, protocol:pong(S#state.net_type, Nonce));
 				addr ->
 					io:format("Packet (addr) = ~p~n", [protocol:parse_addr(Payload,S#state.my_protocol_version)]);
 				getheaders ->
@@ -117,11 +121,17 @@ ok = gen_tcp:send(S#state.socket, protocol:mempool(NetType, S#state.my_protocol_
 				blocks ->
 					io:format("Packet (blocks) = ~p~n", [protocol:parse_blocks(Payload)]);
 				inv ->
-					io:format("Packet (inv) = ~p~n", [protocol:parse_inv(Payload)]);
+					io:format("Packet (inv) = ~p~n", [protocol:parse_inv(Payload)]),
+InvVects = protocol:parse_inv(Payload),
+ok = gen_tcp:send(S#state.socket, protocol:getdata(NetType, [hd(InvVects)]));
+				tx ->
+					io:format("Packet (tx) = ~p~n", [protocol:read_tx(Payload)]);
 				reject ->
 					io:format("Packet (reject) = ~p~n", [protocol:parse_reject(Payload)]);
 				alert ->
-					io:format("Packet (alert) = ~p~n", [Payload])
+					io:format("Packet (alert) = ~p~n", [Payload]);
+				Unknown ->
+					io:format("Unknown Pakcet (~p) = ~p~n", [Unknown, Payload])
 			end;
 		{error, empty} -> Rest = <<>>;
 		{error, checksum, {_NetType, Rest}}->
