@@ -126,15 +126,14 @@ ok = gen_tcp:send(S#state.socket, protocol:mempool(NetType, S#state.my_protocol_
 		{error, empty} -> Rest = <<>>;
 		{error, checksum, {_NetType, Rest}}->
 			throw(checksum);
-		{error, incomplete, {_NetType, Rest}}->
-			io:format("Warning: message incomplete~n",[])
+		{error, incomplete, Rest}-> ok
 	end,
 	if
 		Rest =/= <<>> -> loop(S#state{buf=Rest});
 		Rest =:= <<>> ->
 			receive
-				{tcp, _Socket, Packet1} ->
-					inet:setopts(S#state.socket, [{active, once}]),
+				{tcp, Socket, Packet1} ->
+					inet:setopts(Socket, [{active, once}]),
 					loop(S#state{buf = <<Rest/binary,Packet1/binary>>});
 				{tcp_closed, _Socket} ->
 					stop(tcp_closed, S#state{buf=Rest});

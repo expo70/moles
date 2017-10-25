@@ -20,7 +20,9 @@ read_message(NetType, <<BinCommand:12/binary, Length:32/little, Checksum:4/binar
 		Checksum -> {ok, {NetType, Command, Payload, Rest}};
 		       _ -> {error, checksum, {NetType, Rest}}
 	end;
-read_message(NetType,Bin) -> {error, incomplete, {NetType, Bin}}.
+read_message(NetType,Bin) ->
+	Magic = magic(NetType),
+	{error, incomplete, <<Magic:32/little, Bin/binary>>}.
 
 parse_version(<<MyProtocolVersion:32/little, MyServices:64/little, Timestamp:64/little, AddrRecv:26/binary, Rest/binary>>) ->
 	MyServicesType = parse_services(MyServices),
