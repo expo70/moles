@@ -39,20 +39,25 @@ bits2int(Bin) when is_binary(Bin) ->
 	<<Integer:?ORDER_BITS/big-unsigned>> = Bin1,
 	Integer.
 
-% PrivateKey - integer K
-signature(Hash, K) ->
+int2octets(Int, ?ORDER_BITS) when is_integer(Int) andalso Int<?ORDER ->
+	<<Int:?ORDER_BITS/big-unsigned>>.
+	
+
+% Rondom integer - K
+signature(Hash, PrivateKey, K) ->
 	H = bits2int(Hash),
 	{R1, _} = scalar_multiply_point(K, ?G),
 	R = mod(R1, ?ORDER),
 	case R of
-		0 -> signature(Hash, K+1);
+		0 -> signature(Hash, PrivateKey, K+1);
 		_ ->
-			S = mod((H+mod(K*R,?ORDER))*inverse_mod(K,?ORDER),?ORDER),
+			S = mod((H+mod(R*PrivateKey,?ORDER))*inverse_mod(K,?ORDER),?ORDER),
 			case S of
-				0 -> signature(Hash, K+1);
+				0 -> signature(Hash, PrivateKey, K+1);
 				_ -> {R,S}
 			end
 	end.
+
 
 % PublicKey - Point Q
 % Signature - (r,s)
@@ -110,9 +115,38 @@ scalar_multiply_point(AccPt, N, Pt) ->
 
 %% RFC6979 - Deterministic Usage of the DSA and ECDSA
 %% to genratte of secure k without accessing to a souce of high-quality randomness
+%% ref: https://tools.ietf.org/html/rfc6979
+generate_k_on_message(M, PrivateKey) ->
+	HashType = sha256,
+	HashByteSize = 256 div 8,
 
+	H = crypto:hash(HashType, M), % step a
+	X_Bin = int2octets(PrivateKey, ?ORDER_BITS),
+	V0 = list_to_binary(lists:duplicate(HashByteSize,16#01)), % step b
+	K0 = list_to_binary(lists:duplicate(HashByteSize,16#00)), % step c
 
+	K1 = crypto:hmac(HashType, K0,
+		<<V0/binary, 16#00, X_Bin/binary, H/binary>>), % step d
+	V1 = crypto:hmac(HashType, K1, V0), % step e
+	K2 = crypto:hmac(HashType, K1,
+		<<V1/binary, 16#01, X_Bin/binary, H/binary>>), % step f
+	V2 = crypto:hmac(HashType, K2, V1), % step g
 	
+	until_finding_k(HashType, <<>>, K2, V2).
+
+until_finding_k(HashType, T, K, V) when byte_size(T) < (?ORDER_BITS/8) ->
+	V1 = crypto:hmac(HashType, K, V),
+	until_finding_k(HashType, <<T/binary,V1/binary>>, K, V1);
+until_finding_k(HashType, T, K, V) ->
+	Final_k = bits2int(T),
+	if
+		1 =< Final_k andalso Final_k =< ?ORDER-1 ->
+			Final_k;
+		true ->
+			K1 = crypto:hmac(HashType, K, <<V/binary, 16#00>>),
+			V1 = crypto:hmac(HashType, K1, V),
+			until_finding_k(HashType, T, K1, V1)
+	end.
 
 
 %% signature serialized usgin DER
