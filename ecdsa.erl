@@ -1,5 +1,6 @@
 %% ECDSA (Elliptic Curve Digital Signature Algorithm
 -module(ecdsa).
+-include_lib("eunit/include/eunit.hrl").
 
 -compile(export_all).
 
@@ -14,6 +15,11 @@
 -define(ORDER, 16#fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141).
 % bit length of ORDER
 -define(ORDER_BITS, 256).
+
+
+is_on_elliptic_curve({X,Y}) ->
+	% Y*Y == X*X*X + 7
+	mod(mod(Y*Y,?P) - mod(X*X*X,?P) - 7, ?P) == 0.
 
 
 public_key(PrivateKey) when (1 =< PrivateKey) andalso (PrivateKey =< ?ORDER-1) ->
@@ -51,12 +57,14 @@ signature(Hash, K) ->
 % PublicKey - Point Q
 % Signature - (r,s)
 verify_signature({R,S}, Hash, Q) ->
+	OnEC = is_on_elliptic_curve(Q),
 	if
 		R < 1 orelse ?ORDER-1 < R orelse S < 1 orelse ?ORDER-1 < S ->
 			throw(bad_r_s);
+		not OnEC ->
+			throw(bad_Q);
+		% TODO: check n*Q == O
 		true ->
-			% TODO: check Q is on E
-			% TODO: check n*Q == O
 			H = bits2int(Hash),
 			W = inverse_mod(S,?ORDER),
 			U1 = mod(H*W,?ORDER),
@@ -107,7 +115,41 @@ scalar_multiply_point(AccPt, N, Pt) ->
 	
 
 
+%% signature serialized usgin DER
+signature_DER({R,S}) ->
+	% DER Signed Integer - 0x02
+	% DER Compound Structure - 0x30
+	R_Bin = <<R:?ORDER_BITS/big>>,
+	<<R_FirstBit:1, _/bitstring>> = R_Bin,
+	R_Bin1 = case R_FirstBit of
+		0 -> R_Bin;
+		1 -> <<0:8, R_Bin/binary>> % make it positive
+	end,
+	S_Bin = <<S:?ORDER_BITS/big>>,
+	<<S_FirstBit:1, _/bitstring>> = S_Bin,
+	S_Bin1 = case S_FirstBit of
+		0 -> S_Bin;
+		1 -> <<0:8, S_Bin/binary>>
+	end,
+	R_ByteLen = byte_size(R_Bin1),
+	S_ByteLen = byte_size(S_Bin1),
+	R_DER = <<16#02, R_ByteLen:8, R_Bin1/binary>>,
+	S_DER = <<16#02, S_ByteLen:8, S_Bin1/binary>>,
+	CompoundLen = byte_size(R_DER) + byte_size(S_DER),
+	<<16#30, CompoundLen:8, R_DER/binary, S_DER/binary>>.
 
+parse_signature_DER(<<16#30, CompoundLen:8, Rest:CompoundLen/binary>>) ->
+	<<16#02, R_ByteLen:8, R_Bin:R_ByteLen/binary, Rest1/binary>> = Rest,
+	<<16#02, S_ByteLen:8, S_Bin:S_ByteLen/binary, _Rest2/binary>> = Rest1,
+	
+	%<<R:(R_ByteLen*8)/big>> = R_Bin,
+	%<<S:(S_ByteLen*8)/big>> = S_Bin,
+	R_ZeroBitLen = 8*R_ByteLen - ?ORDER_BITS,
+	S_ZeroBitLen = 8*S_ByteLen - ?ORDER_BITS,
+	<<0:R_ZeroBitLen, R:?ORDER_BITS/big>> = R_Bin,
+	<<0:S_ZeroBitLen, S:?ORDER_BITS/big>> = S_Bin,
+
+	{R,S}.
 
 
 %% Modular
@@ -133,3 +175,16 @@ inverse_mod(A, M) when is_integer(A), is_integer(M), A>0, M>0 ->
 		_ -> throw(no_inverse_mod)
 	end.
 
+
+-ifdef(EUNIT).
+
+
+parse_signature_DER_test_() ->
+[
+	?_assertEqual(parse_signature_DER(protocol:hexstr_to_bin("30450221009eb819743dc981250daaaab0ad51e37ba47f7fb4ace61f6a69111850d6f2990502206b6e59e1c002a4e35ba2be4d00366ea0f3e0b14c829907920705bce336ab2945")),
+	{16#9eb819743dc981250daaaab0ad51e37ba47f7fb4ace61f6a69111850d6f29905,
+	16#6b6e59e1c002a4e35ba2be4d00366ea0f3e0b14c829907920705bce336ab2945})
+].
+
+
+-endif.
