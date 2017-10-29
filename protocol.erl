@@ -237,17 +237,21 @@ parse_getheaders(Bin) -> parse_getblocks(Bin).
 
 
 %% Tx
-read_tx(<<Version:32/little-signed, 0, 1, Rest/binary>> = Bin) -> read_tx(dhash(Bin), Version, true, Rest);
-read_tx(<<Version:32/little-signed, Rest/binary>> = Bin) -> read_tx(dhash(Bin), Version, false, Rest).
+read_tx(<<Version:32/little-signed, 0, 1, Rest/binary>> = Bin) ->
+	read_tx([<<0,1>>, <<Version:32/little-signed>>], dhash(Bin), Version, true, Rest);
+read_tx(<<Version:32/little-signed, Rest/binary>> = Bin) ->
+	read_tx([<<Version:32/little-signed>>], dhash(Bin), Version, false, Rest).
 
-read_tx(Txid, Version, _HasWitnessQ, Rest) ->
-	{TxInCount, Rest1} = read_var_int(Rest),
-	{TxIns, Rest2} = read_tx_in_n(Rest1, TxInCount),
-	{TxOutCount, Rest3} = read_var_int(Rest2),
-	{TxOuts, Rest4} = read_tx_out_n(Rest3, TxOutCount),
+read_tx(TAcc, Txid, Version, _HasWitnessQ, Rest) ->
+	{TAcc1, TxInCount, Rest1} = read_var_int(TAcc, Rest),
+	{TAcc2, TxIns, Rest2} = read_tx_in_n(TAcc1, Rest1, TxInCount),
+	{TAcc3, TxOutCount, Rest3} = read_var_int(TAcc2, Rest2),
+	{TAcc4, TxOuts, Rest4} = read_tx_out_n(TAcc3, Rest3, TxOutCount),
 	<<LockTime:32/little, Rest5/binary>> = Rest4,
+	TAcc5 = [<<LockTime:32/little>>|TAcc4],
+	T = to_template(TAcc5),
 
-	{{parse_hash(Txid), Version, TxIns, TxOuts, LockTime}, Rest5}.
+	{{parse_hash(Txid), Version, TxIns, TxOuts, LockTime, T}, Rest5}.
 
 read_tx_n(Bin, N) -> read_tx_n([], N, Bin).
 
@@ -256,31 +260,93 @@ read_tx_n(Acc, N, Bin) when is_integer(N), N>0 ->
 	{Tx, Rest} = read_tx(Bin),
 	read_tx_n([Tx|Acc], N-1, Rest).
 
+%% create binary template for signing Tx
+%% binary fragments have been accumulated in TAcc in reverse order 
+%%
+%% In the template, atoms used as slots.
+to_template(TAcc) ->
+	L = lists:reverse(TAcc),
+	concatenate_binaries(L).
+
+concatenate_binaries(L) -> concatenate_binaries([], L).
+
+concatenate_binaries(Acc, []) -> lists:reverse(Acc);
+concatenate_binaries(Acc, [{S,_B}=H|T]) when is_atom(S) ->
+	concatenate_binaries([H|Acc], T);
+concatenate_binaries(Acc, [H|T]) when is_binary(H) ->
+	case Acc of
+		[] -> concatenate_binaries([H],T);
+		[{S,_B}=_H1|_T1] when is_atom(S) ->
+			concatenate_binaries([H|Acc], T);
+		[H1|T1] when is_binary(H1) ->
+			concatenate_binaries([<<H1/binary,H/binary>>|T1], T)
+	end.
+
+
+%% template utilities for signature manipulations
+%% fills n-th slots that match the input slot name
+%% 
+%% slot - {NameAtom, DefaultValue}
+%% N - integer | 'any'
+%% X - fun | binary
+template_fill_nth(Template, {SlotName, X}, N) ->
+	template_fill_nth({[], 1}, Template, {SlotName, X}, N).
+
+template_fill_nth({Acc,_}, [], {_, _}, _) -> lists:reverse(Acc);
+template_fill_nth({Acc,Next}, [{S,B}=H|T], {SlotName, X}, N) when is_atom(S) ->
+	{Acc1, Next1} = 
+	if
+		S =:= SlotName ->
+			if
+				(N=:=any) orelse (Next == N) ->
+					Value =
+					if
+						is_function(X) -> X(B);
+						true           -> X
+					end,
+					{[Value|Acc], Next+1};
+				Next /= N                    -> 
+					{[H   |Acc], Next+1}
+			end;
+		H =/= SlotName -> {[H|Acc], Next}
+	end,
+	template_fill_nth({Acc1,Next1}, T, {SlotName, X}, N);
+template_fill_nth({Acc,Next}, [H|T], {SlotName, Bin}, N) when is_binary(H) ->
+	template_fill_nth({[H|Acc],Next}, T, {SlotName, Bin}, N).
+
+template_to_binary(Template) ->
+	list_to_binary([B || B <- Template, is_binary(B)]).
+
 
 %% TxIn
-read_tx_in_n(Bin, N) ->
-	read_tx_in_n([], N, Bin).
+read_tx_in_n(TAcc, Bin, N) ->
+	read_tx_in_n(TAcc, [], N, Bin).
 
-read_tx_in_n(Acc, 0, Bin) -> {lists:reverse(Acc), Bin};
-read_tx_in_n(Acc, N, Bin) when is_integer(N), N>0 ->
+read_tx_in_n(TAcc, Acc, 0, Bin) -> {TAcc, lists:reverse(Acc), Bin};
+read_tx_in_n(TAcc, Acc, N, Bin) when is_integer(N), N>0 ->
 	<<PreviousOutput:36/binary, Rest/binary>> = Bin,
-	{ScriptLength, Rest1} = read_var_int(Rest),
+	TAcc1 = [PreviousOutput|TAcc],
+	{[VarIntBin], ScriptLength, Rest1} = read_var_int([], Rest),
 	<<SignatureScript:ScriptLength/binary, Rest2/binary>> = Rest1,
+	TAcc2 = [{scriptSig,<<VarIntBin/binary, SignatureScript/binary>>}|TAcc1],
 	<<Sequence:32/little, Rest3/binary>> = Rest2,
-	read_tx_in_n([{parse_outpoint(PreviousOutput), script:parse_scriptSig(SignatureScript), Sequence}|Acc], N-1, Rest3).
+	TAcc3 = [<<Sequence:32/little>>|TAcc2],
+	read_tx_in_n(TAcc3, [{parse_outpoint(PreviousOutput), script:parse_scriptSig(SignatureScript), Sequence}|Acc], N-1, Rest3).
 
 %% Outpoint
 parse_outpoint(<<Hash:32/binary, Index:32/little>>) -> {parse_hash(Hash), Index}.
 
 %% TxOut
-read_tx_out_n(Bin, N) -> read_tx_out_n([], N, Bin).
+read_tx_out_n(TAcc, Bin, N) -> read_tx_out_n(TAcc, [], N, Bin).
 
-read_tx_out_n(Acc, 0, Bin) -> {lists:reverse(Acc), Bin};
-read_tx_out_n(Acc, N, Bin) when is_integer(N), N>0 ->
-	<<Value:64/little, Rest/binary>> = Bin,
-	{PkScriptLength, Rest1} = read_var_int(Rest),
+read_tx_out_n(TAcc, Acc, 0, Bin) -> {TAcc, lists:reverse(Acc), Bin};
+read_tx_out_n(TAcc, Acc, N, Bin) when is_integer(N), N>0 ->
+	<<Value:64/little, Rest/binary>> = Bin, % in satoshis
+	TAcc1 = [<<Value:64/little>>|TAcc],
+	{[VarIntBin], PkScriptLength, Rest1} = read_var_int([], Rest),
 	<<PkScript:PkScriptLength/binary, Rest2/binary>> = Rest1,
-	read_tx_out_n([{Value, script:parse_scriptPubKey(PkScript)}|Acc], N-1, Rest2).
+	TAcc2 = [{scriptPubKey,<<VarIntBin/binary, PkScript/binary>>}|TAcc1],
+	read_tx_out_n(TAcc2, [{Value, script:parse_scriptPubKey(PkScript)}|Acc], N-1, Rest2).
 
 %% Block
 read_block(Bin) ->
@@ -429,6 +495,14 @@ read_var_int(<<16#FF, X:64/little, Rest/binary>>) -> {X, Rest};
 read_var_int(<<16#FE, X:32/little, Rest/binary>>) -> {X, Rest};
 read_var_int(<<16#FD, X:16/little, Rest/binary>>) -> {X, Rest};
 read_var_int(<<X, Rest/binary>>) -> {X, Rest}.
+
+read_var_int(TAcc, <<16#FF, X:64/little, Rest/binary>>) ->
+	{[<<16#FF, X:64/little>>|TAcc], X, Rest};
+read_var_int(TAcc, <<16#FE, X:32/little, Rest/binary>>) ->
+	{[<<16#FE, X:32/little>>|TAcc], X, Rest};
+read_var_int(TAcc, <<16#FD, X:16/little, Rest/binary>>) ->
+	{[<<16#FD, X:16/little>>|TAcc], X, Rest};
+read_var_int(TAcc, <<X, Rest/binary>>) -> {[<<X>>|TAcc], X, Rest}.
 
 var_str(Str) ->
 	Bin = list_to_binary(Str),
