@@ -379,7 +379,7 @@ merkle_hash(Txids) when is_list(Txids) ->
 read_block_header(<<Version:32/little, PrevBlock:32/binary, MerkleRoot:32/binary, Timestamp:32/little, Bits:32/little, Nonce:32/little, Rest/binary>>) ->
 	Hash = block_hash(Version, PrevBlock, MerkleRoot, Timestamp, Bits, Nonce),
 	{TxnCount, Rest1} = read_var_int(Rest),
-	{{parse_hash(Hash), Version, parse_hash(PrevBlock), parse_hash(MerkleRoot), date_time(Timestamp), Bits, Nonce, TxnCount}, Rest1}.
+	{{parse_hash(Hash), Version, parse_hash(PrevBlock), parse_hash(MerkleRoot), date_time(Timestamp), parse_difficulty_target(Bits), Nonce, TxnCount}, Rest1}.
 
 read_block_header_n(Bin, N) -> read_block_header_n([], N, Bin).
 

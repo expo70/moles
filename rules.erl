@@ -1,4 +1,4 @@
-%% Concensus and obiligatory rules for the integrity of the Block Chain
+%% Concensus and obiligatory rules for the integrity of the Bitcoin Block Chain
 %%
 -module(rules).
 -include_lib("eunit/include/eunit.hrl").
@@ -71,4 +71,12 @@ verify_merkle_root({{_BlockHash, _BlockVersion, _PrevBlockHash, MerkleRootHash, 
 	Txids = [protocol:hash(TxidStr) || {TxidStr,_,_,_,_,_} <- Txns],
 	protocol:hash(MerkleRootHash) == protocol:merkle_hash(Txids).
 
+
+%% Difficulty-1 (the minimum allowed difficulty)
+minimum_difficulty_target(mainnet) ->
+	protocol:parse_difficulty_target(16#1d00ffff);
+minimum_difficulty_target(testnet) ->
+	protocol:parse_difficulty_target(16#1d00ffff);
+minimum_difficulty_target(regtest) ->
+	protocol:parse_difficulty_target(16#207fffff).
 
