@@ -504,6 +504,10 @@ read_var_int(TAcc, <<16#FD, X:16/little, Rest/binary>>) ->
 	{[<<16#FD, X:16/little>>|TAcc], X, Rest};
 read_var_int(TAcc, <<X, Rest/binary>>) -> {[<<X>>|TAcc], X, Rest}.
 
+start_with_var_int(Bin) ->
+	SizeBin = var_int(byte_size(Bin)),
+	<<SizeBin/binary, Bin/binary>>.
+
 var_str(Str) ->
 	Bin = list_to_binary(Str),
 	Length = var_int(byte_size(Bin)),
@@ -540,7 +544,12 @@ bin12_to_atom(Bin) when byte_size(Bin) == 12 ->
 	L = string:strip(binary_to_list(Bin), right, 0),
 	list_to_atom(L).
 
+%% 256-bit hash
 dhash(Bin) -> crypto:hash(sha256, crypto:hash(sha256, Bin)).
+
+%% 160-bit hash
+%% for public key hash (= bitcoin address)
+hash160(Bin) -> crypto:hash(ripemd160, crypto:hash(sha256, Bin)).
 
 parse_hash(<<Hash:32/binary>>) -> bin_to_hexstr(Hash).
 hash(Str) when length(Str)==2*32 ->

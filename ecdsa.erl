@@ -203,6 +203,12 @@ parse_public_key(<<16#03, X:256/big>>) ->
 		1 -> {X,Y1}
 	end.
 
+public_key({X,Y}, uncompressed) -> <<16#04, X:256/big, Y:256/big>>;
+public_key({X,Y},   compressed) ->
+	case Y rem 2 of
+		0 -> <<16#02, X:256/big>>;
+		1 -> <<16#03, X:256/big>>
+	end.
 
 
 %% obtain Qy of public key from Qx
