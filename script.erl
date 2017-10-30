@@ -54,6 +54,29 @@ parse_scriptPubKey(<<?OP_HASH160, Rest/binary>>) ->
 parse_scriptPubKey(Bin) ->
 	{scriptPubKey, {unknown, read_PUSHes(Bin)}}.
 
+
+parse_scriptSig(<<0, Rest/binary>> = Script) ->
+	{Pushes,Rest1} = read_PUSHes(Rest),
+	if
+		length(Pushes) >= 2 ->
+			<<>> = Rest1,
+			RPushes = lists:reverse(Pushes),
+			Sigs = [
+				begin
+					DERLen = byte_size(B)-1,
+					<<SigDER:DERLen/binary, SigType>> = B,
+					{sig, ecdsa:parse_signature_DER(SigDER), SigType}
+				end
+				|| {push, B} <- lists:droplast(RPushes)],
+			{push, RedeemScript} = lists:last(RPushes),
+			{scriptSig,
+				{
+					{multisig, Sigs},
+					{redeemScript, RedeemScript}
+				}
+			};
+		true -> {scriptSig, {unknown, Script}}
+	end;
 parse_scriptSig(Script) ->
 	{Pushes,Rest1} = read_PUSHes(Script),
 	case length(Pushes) of
