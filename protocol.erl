@@ -618,6 +618,35 @@ partition_2_with_padding(L) when is_list(L) ->
 	end.
 
 
+
+%% Difficulty target (Bits) for Proof of Work
+%%
+%%     0x** |******
+%% 256^(P-3)*  A
+%%
+%% ref: https://bitcoin.org/en/developer-reference#target-nbits
+%% NOTE: Bytes are encoded in little-endian.
+parse_difficulty_target(<<A3,A2,A1,P>>) ->
+	%<<A:24/little-signed>> = <<A3,A2,A1>>,
+	%A bsl (8*(P-3));
+	<<A:24/little>> = <<A3,A2,A1>>,
+	AMod =
+		case A1 band 16#80 of
+			16#00 -> A;
+			16#80 -> -(A - 16#800000)
+		end,
+	AMod bsl (8*(P-3));
+parse_difficulty_target(N) ->
+	parse_difficulty_target(<<N:32/little>>).
+
+%	{P1, A1} =
+%		case A1 band 16#80 of
+%			16#00 -> {P,  A};
+%			16#80 -> {P+1,A bsr 8}
+%		end,
+
+
+
 -ifdef(EUNIT).
 
 partition_2_with_padding_test_() ->
@@ -688,6 +717,15 @@ merkle_hash_test_() ->
 		"52ed578cb6ed9ae5f5316d45429bf69cfdde2be39497ba31570164eb2277df9c")
 	].
 
+parse_difficulty_target_test_() ->
+	[
+		?_assertEqual(parse_difficulty_target(16#01003456),  16#00),
+		?_assertEqual(parse_difficulty_target(16#01123456),  16#12),
+		?_assertEqual(parse_difficulty_target(16#02008000),  16#80),
+		?_assertEqual(parse_difficulty_target(16#05009234),  16#92340000),
+		?_assertEqual(parse_difficulty_target(16#04923456), -16#12345600),
+		?_assertEqual(parse_difficulty_target(16#04123456),  16#12345600)
+	].
 
 -endif.
 

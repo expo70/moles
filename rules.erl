@@ -1,4 +1,7 @@
+%% Concensus and obiligatory rules for the integrity of the Block Chain
+%%
 -module(rules).
+-include_lib("eunit/include/eunit.hrl").
 
 -compile(export_all).
 
@@ -57,10 +60,15 @@ verify_signatures_in_Tx({_TxIdStr, _TxVersion, TxIns, _TxOuts, _LockTime, Templa
 		Signatures, SignedHashes, PublicKeys).
 
 
+% For P2SH scripts, the Mark used when signinig is RedeemScript.
+% ref: http://www.soroushjp.com/2014/12/20/bitcoin-multisig-the-hard-way-understanding-raw-multisignature-bitcoin-transactions/
+
+
 %balance_of_Tx({_TxIdStr, _TxVersion, TxIns, TxOuts, _LockTime, _Template}) ->
 
 
 verify_merkle_root({{_BlockHash, _BlockVersion, _PrevBlockHash, MerkleRootHash, _Time, _Bits, _Nonce, _TxnCount}, Txns}) ->
 	Txids = [protocol:hash(TxidStr) || {TxidStr,_,_,_,_,_} <- Txns],
 	protocol:hash(MerkleRootHash) == protocol:merkle_hash(Txids).
+
 
