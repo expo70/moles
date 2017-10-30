@@ -58,4 +58,9 @@ verify_signatures_in_Tx({_TxIdStr, _TxVersion, TxIns, _TxOuts, _LockTime, Templa
 
 
 %balance_of_Tx({_TxIdStr, _TxVersion, TxIns, TxOuts, _LockTime, _Template}) ->
-	
+
+
+verify_merkle_root({{_BlockHash, _BlockVersion, _PrevBlockHash, MerkleRootHash, _Time, _Bits, _Nonce, _TxnCount}, Txns}) ->
+	Txids = [protocol:hash(TxidStr) || {TxidStr,_,_,_,_,_} <- Txns],
+	protocol:hash(MerkleRootHash) == protocol:merkle_hash(Txids).
+

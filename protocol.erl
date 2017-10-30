@@ -237,12 +237,12 @@ parse_getheaders(Bin) -> parse_getblocks(Bin).
 
 
 %% Tx
-read_tx(<<Version:32/little-signed, 0, 1, Rest/binary>> = Bin) ->
-	read_tx([<<0,1>>, <<Version:32/little-signed>>], dhash(Bin), Version, true, Rest);
-read_tx(<<Version:32/little-signed, Rest/binary>> = Bin) ->
-	read_tx([<<Version:32/little-signed>>], dhash(Bin), Version, false, Rest).
+read_tx(<<Version:32/little-signed, 0, 1, Rest/binary>>) ->
+	read_tx([<<0,1>>, <<Version:32/little-signed>>], Version, true, Rest);
+read_tx(<<Version:32/little-signed, Rest/binary>>) ->
+	read_tx([<<Version:32/little-signed>>], Version, false, Rest).
 
-read_tx(TAcc, Txid, Version, _HasWitnessQ, Rest) ->
+read_tx(TAcc, Version, _HasWitnessQ, Rest) ->
 	{TAcc1, TxInCount, Rest1} = read_var_int(TAcc, Rest),
 	{TAcc2, TxIns, Rest2} = read_tx_in_n(TAcc1, Rest1, TxInCount),
 	{TAcc3, TxOutCount, Rest3} = read_var_int(TAcc2, Rest2),
@@ -250,6 +250,7 @@ read_tx(TAcc, Txid, Version, _HasWitnessQ, Rest) ->
 	<<LockTime:32/little, Rest5/binary>> = Rest4,
 	TAcc5 = [<<LockTime:32/little>>|TAcc4],
 	T = to_template(TAcc5),
+	Txid = dhash(template_default_binary(T)),
 
 	{{parse_hash(Txid), Version, TxIns, TxOuts, LockTime, T}, Rest5}.
 
@@ -281,6 +282,14 @@ concatenate_binaries(Acc, [H|T]) when is_binary(H) ->
 		[H1|T1] when is_binary(H1) ->
 			concatenate_binaries([<<H1/binary,H/binary>>|T1], T)
 	end.
+
+template_default_binary(T) -> template_default_binary(<<>>, T).
+
+template_default_binary(Acc, []) -> Acc;
+template_default_binary(Acc, [{S,B}=_H|T]) when is_atom(S) ->
+	template_default_binary(<<Acc/binary,B/binary>>, T);
+template_default_binary(Acc, [H|T]) when is_binary(H) ->
+	template_default_binary(<<Acc/binary,H/binary>>, T).
 
 
 %% template utilities for signature manipulations

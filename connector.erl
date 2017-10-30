@@ -42,7 +42,7 @@ init([]) ->
 	MyAddress = {202,218,2,35},
 	MyPort = port(NetType),
 	
-	MyProtocolVersion = 60002,
+	MyProtocolVersion = 70015,
 	
 	listener:start_link(MyPort),
 	{ok, #state{net_type=NetType, peer_address=PeerAddress, peer_port=PeerPort, peer_protocol_version=0, my_address=MyAddress, my_port=MyPort, my_protocol_version=MyProtocolVersion}}.
@@ -84,7 +84,7 @@ handshake(S) ->
 	MyProtocolVersion = S#state.my_protocol_version,
 	PeerProtocolVersion = MyProtocolVersion,
 
-	Message = protocol:version(NetType, {PeerAddress, PeerPort, node_network, PeerProtocolVersion}, {MyAddress, MyPort, node_network, MyProtocolVersion}, "/Moles:0.0.1/", 0, false),
+	Message = protocol:version(NetType, {PeerAddress, PeerPort, node_network, PeerProtocolVersion}, {MyAddress, MyPort, node_network, MyProtocolVersion}, "/Moles:0.0.1/", 0, true),
 	ok = gen_tcp:send(Socket, Message),
 	{ok, Packet } = gen_tcp:recv(Socket, 0, 10*1000),
 	
@@ -103,9 +103,9 @@ loop(S) ->
 					
 				verack ->
 					io:format("Packet (verack) = ~p~n", [protocol:parse_verack(Payload)]),
-%ok = gen_tcp:send(Socket, protocol:getheaders(S#state.net_type, {MyProtocolVersion, [genesis_block_hash(NetType)], ?HASH0})),
-%ok = gen_tcp:send(S#state.socket, protocol:mempool(NetType, S#state.my_protocol_version));
-ok = gen_tcp:send(S#state.socket, protocol:getaddr(NetType));
+ok = gen_tcp:send(S#state.socket, protocol:getheaders(S#state.net_type, {S#state.my_protocol_version, [genesis_block_hash(NetType)], ?HASH0})),
+ok = gen_tcp:send(S#state.socket, protocol:mempool(NetType, S#state.my_protocol_version));
+%ok = gen_tcp:send(S#state.socket, protocol:getaddr(NetType));
 				ping ->
 					Nonce = protocol:parse_ping(Payload),
 					io:format("Packet (ping) = ~p~n", [Nonce]),
@@ -113,17 +113,21 @@ ok = gen_tcp:send(S#state.socket, protocol:getaddr(NetType));
 				addr ->
 					io:format("Packet (addr) = ~p~n", [protocol:parse_addr(Payload,S#state.my_protocol_version)]);
 				getheaders ->
-					io:format("Packet (getheaders) = ~p~n", [protocol:parse_getheaders(Payload)]);
+					io:format("Packet (getheaders) = ~p~n", [protocol:parse_getheaders(Payload)]),
+					{_Version, Hashes, _StopHash} = protocol:parse_getheaders(Payload),
+					InvVects = [{msg_block, hd(Hashes)}],
+					Message = protocol:getdata(NetType, InvVects), 
+					ok = gen_tcp:send(S#state.socket, Message);
 				sendheaders ->
 					io:format("Packet (sendheaders) = ~p~n", [protocol:parse_sendheaders(Payload)]);
 				headers ->
 					io:format("Packet (headers) = ~p~n", [protocol:parse_headers(Payload)]);
-				blocks ->
-					io:format("Packet (blocks) = ~p~n", [protocol:parse_blocks(Payload)]);
+				block ->
+					io:format("Packet (block) = ~p~n", [protocol:read_block(Payload)]);
 				inv ->
 					io:format("Packet (inv) = ~p~n", [protocol:parse_inv(Payload)]),
 InvVects = protocol:parse_inv(Payload),
-ok = gen_tcp:send(S#state.socket, protocol:getdata(NetType, [hd(InvVects)]));
+ok = gen_tcp:send(S#state.socket, protocol:getdata(NetType, InvVects));
 				tx ->
 					io:format("Packet (tx) = ~p~n", [protocol:read_tx(Payload)]);
 				reject ->
