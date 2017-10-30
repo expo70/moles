@@ -10,8 +10,14 @@
 %% Verifying signatures in scriptSigs in a Tx
 %% only supports the most common case:
 %% * All the signing hash type are SIGHASH_ALL
+%% * (currently) Assumes all the prev outputs are the most typical one.
 %% 
 %% Representation of Tx is defined in protocol module
+%% does not support the verification of coinbase Tx 
+%% (i.e., the first transaction in a block)
+%% 
+%% returns a boolean vector whose elements show the
+%% result of signature verification for each TxIns.
 verify_signatures_in_Tx({_TxIdStr, _TxVersion, TxIns, _TxOuts, _LockTime, Template}) ->
 	N_TxIns = length(TxIns),
 
@@ -31,6 +37,7 @@ verify_signatures_in_Tx({_TxIdStr, _TxVersion, TxIns, _TxOuts, _LockTime, Templa
 	%% an easy alternative.
 	Marks = [protocol:start_with_var_int(script:create_P2PKH_scriptPubKey(P,compressed)) || P <- PublicKeys],
 
+	% makes scriptPubKey slots are filled by the original binaries
 	TemplateSig = protocol:template_fill_nth(Template, {scriptPubKey, fun(X)->X end}, any),
 	SignedHashes =
 		[protocol:dhash(
@@ -48,3 +55,7 @@ verify_signatures_in_Tx({_TxIdStr, _TxVersion, TxIns, _TxOuts, _LockTime, Templa
 	
 	lists:zipwith3(fun(S,H,P) -> ecdsa:verify_signature(S,H,P) end,
 		Signatures, SignedHashes, PublicKeys).
+
+
+%balance_of_Tx({_TxIdStr, _TxVersion, TxIns, TxOuts, _LockTime, _Template}) ->
+	
