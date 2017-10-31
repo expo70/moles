@@ -176,12 +176,10 @@ parse_signature_DER(<<16#30, CompoundLen:8, Rest:CompoundLen/binary>>) ->
 	<<16#02, R_ByteLen:8, R_Bin:R_ByteLen/binary, Rest1/binary>> = Rest,
 	<<16#02, S_ByteLen:8, S_Bin:S_ByteLen/binary, _Rest2/binary>> = Rest1,
 	
-	%<<R:(R_ByteLen*8)/big>> = R_Bin,
-	%<<S:(S_ByteLen*8)/big>> = S_Bin,
-	R_ZeroBitLen = 8*R_ByteLen - ?ORDER_BITS,
-	S_ZeroBitLen = 8*S_ByteLen - ?ORDER_BITS,
-	<<0:R_ZeroBitLen, R:?ORDER_BITS/big>> = R_Bin,
-	<<0:S_ZeroBitLen, S:?ORDER_BITS/big>> = S_Bin,
+	R_BitLen = 8*R_ByteLen,
+	S_BitLen = 8*S_ByteLen,
+	<<R:R_BitLen/big>> = R_Bin,
+	<<S:S_BitLen/big>> = S_Bin,
 
 	{R,S}.
 
