@@ -27,15 +27,18 @@
 %% 
 %% returns a boolean vector whose elements show the
 %% result of signature verification for each TxIns.
-verify_signatures_in_Tx({_TxIdStr, _TxVersion, TxIns, _TxOuts, _LockTime, Template}) ->
+verify_signatures_in_Tx({_TxIdStr, _TxVersion, TxIns, _TxOuts, _LockTime, Template}=Tx) ->
 	N_TxIns = length(TxIns),
 
-	{Signatures, HashTypes, PublicKeys} = lists:unzip3([
-		{S,HT,P} || {_Idx, _PreviousOutput, {scriptSig, {{sig, S, HT},{pubKey, P}}}, _Sequence} <- TxIns
+	[Indexes, Signatures, HashTypes, PublicKeys] = u:transpose([
+		[Idx,S,1,P] || {Idx, _PreviousOutput, {scriptSig, {{sig, S, 1},{pubKey, P}}}, _Sequence} <- TxIns
 	]),
+	Delegated =
 	if
-		length(Signatures) /= N_TxIns -> throw(unknown_scriptSig);
-		length(Signatures) == N_TxIns -> ok
+		length(Signatures) /= N_TxIns ->
+			Unfiltered = u:subtract_range(lists:seq(0,N_TxIns), Indexes),
+			[Unfiltered, verify_signatures_in_Tx2(Tx, Unfiltered)];
+		length(Signatures) == N_TxIns -> [[],[]]
 	end,
 	
 	%% This is what fills in scriptSig slots when signing.
@@ -60,14 +63,20 @@ verify_signatures_in_Tx({_TxIdStr, _TxVersion, TxIns, _TxOuts, _LockTime, Templa
 			HT = lists:nth(N, HashTypes),
 			<<B/binary, HT:32/little>> % HashType should be appended
 			end
-					) || N <- lists:seq(1,N_TxIns)],
+					) || N <- Indexes],
 	
-	lists:zipwith3(fun(S,H,P) -> ecdsa:verify_signature(S,H,P) end,
-		Signatures, SignedHashes, PublicKeys).
+	V = lists:zipwith3(fun(S,H,P) -> ecdsa:verify_signature(S,H,P) end,
+		Signatures, SignedHashes, PublicKeys),
+	lists:sort(fun({I1,_},{I2,_}) -> I1=<I2 end, 
+		lists:zip(Indexes,V) ++ apply(lists,zip,Delegated)).
 
+%% Verify P2SH signatures
+%% 
+%% For P2SH scripts, the Mark used when signinig is RedeemScript.
+%% ref: http://www.soroushjp.com/2014/12/20/bitcoin-multisig-the-hard-way-understanding-raw-multisignature-bitcoin-transactions/
+verify_signatures_in_Tx2({_TxIdStr, _TxVersion, TxIns, _TxOuts, _LockTime, Template}=Tx, Indexes) ->
+	ok.
 
-% For P2SH scripts, the Mark used when signinig is RedeemScript.
-% ref: http://www.soroushjp.com/2014/12/20/bitcoin-multisig-the-hard-way-understanding-raw-multisignature-bitcoin-transactions/
 
 
 %balance_of_Tx({_TxIdStr, _TxVersion, TxIns, TxOuts, _LockTime, _Template}) ->
@@ -93,7 +102,7 @@ verify_signatures_in_Tx_sub() ->
 	{_,Block,_}=protocol:read_blockdump(Bin),
 	{{_BlockHeader, Txs}, _Rest} = Block, 
 	[_T1,T2,_T3,_T4,_T5,_T6,_T7] = Txs,
-	?assertEqual(lists:all(fun(X)->X end, verify_signatures_in_Tx(T2)), true),
+	?assertEqual(lists:all(fun({_,X})->X end, verify_signatures_in_Tx(T2)), true),
 	ok.
 
 verify_signatures_in_Tx_test_() ->

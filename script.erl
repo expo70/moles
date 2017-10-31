@@ -14,6 +14,7 @@
 -define(OP_CHECKSIG, 172).
 -define(OP_EQUAL, 135).
 -define(OP_CHECKMULTISIG, 174).
+-define(OP_RETURN, 106).
 
 
 %%
@@ -51,6 +52,15 @@ parse_scriptPubKey(<<?OP_HASH160, Rest/binary>>) ->
 	[{push,RedeemScriptHash}] = Pushes,
 	<<?OP_EQUAL>> = Rest1,
 	{scriptPubKey, {redeemScriptHash, RedeemScriptHash}};
+parse_scriptPubKey(<<?OP_RETURN, Rest/binary>> =Script) ->
+	{Pushes,Rest1} = read_PUSHes(Rest),
+	if
+		length(Pushes) == 1 ->
+			<<>> = Rest1,
+			{push, Bin} = hd(Pushes),
+			{scriptPubkey, {op_return, Bin}};
+		true -> {scriptSig, {unknown, Script}}
+	end;
 parse_scriptPubKey(Bin) ->
 	{scriptPubKey, {unknown, read_PUSHes(Bin)}}.
 
@@ -85,12 +95,19 @@ parse_scriptSig(Script) ->
 		 	[{push, PubKey}, {push, Sig}] = Pushes,
 			DERLen = byte_size(Sig)-1,
 			<<SigDER:DERLen/binary, SigType>> = Sig,
+			%try
 		 	{scriptSig,
 				{
 					{sig,    ecdsa:parse_signature_DER(SigDER), SigType},
 					{pubKey, ecdsa:parse_public_key(PubKey)}
 				}
-			};
+			}
+			%of
+			%	V -> V
+			%catch
+			%error:_ -> {scriptSig, {unknown, Script}}
+			%end
+			;
 		 _ -> {scriptSig, {unknown, Script}}   
 	end.
 
