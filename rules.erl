@@ -5,6 +5,12 @@
 
 -compile(export_all).
 
+
+%% Critical limitations
+%% bitcoin/src/consensus/consensus.h
+%%-define(
+
+
 %% Verifying Signatures on Tx
 %%
 %% ref: https://en.bitcoin.it/wiki/OP_CHECKSIG
@@ -25,7 +31,7 @@ verify_signatures_in_Tx({_TxIdStr, _TxVersion, TxIns, _TxOuts, _LockTime, Templa
 	N_TxIns = length(TxIns),
 
 	{Signatures, HashTypes, PublicKeys} = lists:unzip3([
-		{S,HT,P} || {_PreviousOutput, {scriptSig, {{sig, S, HT},{pubKey, P}}}, _Sequence} <- TxIns
+		{S,HT,P} || {_Idx, _PreviousOutput, {scriptSig, {{sig, S, HT},{pubKey, P}}}, _Sequence} <- TxIns
 	]),
 	if
 		length(Signatures) /= N_TxIns -> throw(unknown_scriptSig);
@@ -79,4 +85,23 @@ minimum_difficulty_target(testnet) ->
 	protocol:parse_difficulty_target(16#1d00ffff);
 minimum_difficulty_target(regtest) ->
 	protocol:parse_difficulty_target(16#207fffff).
+
+-ifdef(EUNIT).
+
+verify_signatures_in_Tx_sub() ->
+	{ok, Bin} = file:read_file("/home/kanso/.bitcoin/testnet3/blocks/blk00002.dat"),
+	{_,Block,_}=protocol:read_blockdump(Bin),
+	{{_BlockHeader, Txs}, _Rest} = Block, 
+	[_T1,T2,_T3,_T4,_T5,_T6,_T7] = Txs,
+	?assertEqual(lists:all(fun(X)->X end, verify_signatures_in_Tx(T2)), true),
+	ok.
+
+verify_signatures_in_Tx_test_() ->
+	[
+		{timeout, 10, fun verify_signatures_in_Tx_sub/0}
+	].
+
+
+
+-endif.
 

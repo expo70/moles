@@ -77,6 +77,7 @@ verack(NetType) -> message(NetType, verack, <<>>).
 getaddr(NetType) -> message(NetType, getaddr, <<>>).
 
 %% mempool message
+%% BIP35
 mempool(NetType, ProtocolVersion) when ProtocolVersion >= 60002 ->
 	message(NetType, mempool, <<>>).
 
@@ -237,8 +238,11 @@ parse_getheaders(Bin) -> parse_getblocks(Bin).
 
 
 %% Tx
+
+% for SegWit
 read_tx(<<Version:32/little-signed, 0, 1, Rest/binary>>) ->
 	read_tx([<<0,1>>, <<Version:32/little-signed>>], Version, true, Rest);
+% for non-SegWit
 read_tx(<<Version:32/little-signed, Rest/binary>>) ->
 	read_tx([<<Version:32/little-signed>>], Version, false, Rest).
 
@@ -251,6 +255,7 @@ read_tx(TAcc, Version, _HasWitnessQ, Rest) ->
 	TAcc5 = [<<LockTime:32/little>>|TAcc4],
 	T = to_template(TAcc5),
 	Txid = dhash(template_default_binary(T)),
+io:format("~p~n",[{parse_hash(Txid), Version, TxIns, TxOuts, LockTime}]),
 
 	{{parse_hash(Txid), Version, TxIns, TxOuts, LockTime, T}, Rest5}.
 
@@ -328,11 +333,12 @@ template_to_binary(Template) ->
 
 
 %% TxIn
+%% as for Sequence, see BIP68
 read_tx_in_n(TAcc, Bin, N) ->
-	read_tx_in_n(TAcc, [], N, Bin).
+	read_tx_in_n(TAcc, [], {N,N}, Bin).
 
-read_tx_in_n(TAcc, Acc, 0, Bin) -> {TAcc, lists:reverse(Acc), Bin};
-read_tx_in_n(TAcc, Acc, N, Bin) when is_integer(N), N>0 ->
+read_tx_in_n(TAcc, Acc, {0,_ }, Bin) -> {TAcc, lists:reverse(Acc), Bin};
+read_tx_in_n(TAcc, Acc, {N,N0}, Bin) when is_integer(N), N>0 ->
 	<<PreviousOutput:36/binary, Rest/binary>> = Bin,
 	TAcc1 = [PreviousOutput|TAcc],
 	{[VarIntBin], ScriptLength, Rest1} = read_var_int([], Rest),
@@ -340,22 +346,22 @@ read_tx_in_n(TAcc, Acc, N, Bin) when is_integer(N), N>0 ->
 	TAcc2 = [{scriptSig,<<VarIntBin/binary, SignatureScript/binary>>}|TAcc1],
 	<<Sequence:32/little, Rest3/binary>> = Rest2,
 	TAcc3 = [<<Sequence:32/little>>|TAcc2],
-	read_tx_in_n(TAcc3, [{parse_outpoint(PreviousOutput), script:parse_scriptSig(SignatureScript), Sequence}|Acc], N-1, Rest3).
+	read_tx_in_n(TAcc3, [{N0-(N-1), parse_outpoint(PreviousOutput), script:parse_scriptSig(SignatureScript), Sequence}|Acc], {N-1,N0}, Rest3).
 
 %% Outpoint
 parse_outpoint(<<Hash:32/binary, Index:32/little>>) -> {parse_hash(Hash), Index}.
 
 %% TxOut
-read_tx_out_n(TAcc, Bin, N) -> read_tx_out_n(TAcc, [], N, Bin).
+read_tx_out_n(TAcc, Bin, N) -> read_tx_out_n(TAcc, [], {N,N}, Bin).
 
-read_tx_out_n(TAcc, Acc, 0, Bin) -> {TAcc, lists:reverse(Acc), Bin};
-read_tx_out_n(TAcc, Acc, N, Bin) when is_integer(N), N>0 ->
+read_tx_out_n(TAcc, Acc, {0, _}, Bin) -> {TAcc, lists:reverse(Acc), Bin};
+read_tx_out_n(TAcc, Acc, {N,N0}, Bin) when is_integer(N), N>0 ->
 	<<Value:64/little, Rest/binary>> = Bin, % in satoshis
 	TAcc1 = [<<Value:64/little>>|TAcc],
 	{[VarIntBin], PkScriptLength, Rest1} = read_var_int([], Rest),
 	<<PkScript:PkScriptLength/binary, Rest2/binary>> = Rest1,
 	TAcc2 = [{scriptPubKey,<<VarIntBin/binary, PkScript/binary>>}|TAcc1],
-	read_tx_out_n(TAcc2, [{Value, script:parse_scriptPubKey(PkScript)}|Acc], N-1, Rest2).
+	read_tx_out_n(TAcc2, [{N0-(N-1), Value, script:parse_scriptPubKey(PkScript)}|Acc], {N-1,N0}, Rest2).
 
 %% Block
 read_block(Bin) ->
@@ -376,6 +382,7 @@ merkle_hash(Txids) when is_list(Txids) ->
 	merkle_hash([dhash(list_to_binary(P)) || P <- partition_2_with_padding(Txids)]).
 
 %% Block Header
+%% for block Version, see BIP9
 read_block_header(<<Version:32/little, PrevBlock:32/binary, MerkleRoot:32/binary, Timestamp:32/little, Bits:32/little, Nonce:32/little, Rest/binary>>) ->
 	Hash = block_hash(Version, PrevBlock, MerkleRoot, Timestamp, Bits, Nonce),
 	{TxnCount, Rest1} = read_var_int(Rest),
@@ -404,6 +411,7 @@ parse_headers(Bin) ->
 
 
 %% reject message
+%% BIP61
 parse_reject(Bin) ->
 	{MessageType, Rest} = read_var_str(Bin),
 	<<CCode, Rest1/binary>> = Rest,
@@ -647,6 +655,13 @@ parse_difficulty_target(N) ->
 
 
 
+
+%% SegWit (segregated witness) supports
+%% BIP141 - bit1
+is_SegWit_block_version(BlockVersion) -> BlockVersion band 16#40000000 /= 0.
+
+
+
 -ifdef(EUNIT).
 
 partition_2_with_padding_test_() ->
@@ -725,6 +740,12 @@ parse_difficulty_target_test_() ->
 		?_assertEqual(parse_difficulty_target(16#05009234),  16#92340000),
 		?_assertEqual(parse_difficulty_target(16#04923456), -16#12345600),
 		?_assertEqual(parse_difficulty_target(16#04123456),  16#12345600)
+	].
+
+is_SegWit_block_version_() ->
+	[
+		?_assertEqual(is_SegWit_block_version(16#40000002), true),
+		?_assertEqual(is_SegWit_block_version(2), false)
 	].
 
 -endif.
