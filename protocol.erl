@@ -240,24 +240,39 @@ parse_getheaders(Bin) -> parse_getblocks(Bin).
 %% Tx
 
 % for SegWit
+% see BIP-144
+% marker and flag (collectly, <<0,1>>) are not included in Txid calculations
+% but included in wTxid calculations
 read_tx(<<Version:32/little-signed, 0, 1, Rest/binary>>) ->
-	read_tx([<<0,1>>, <<Version:32/little-signed>>], Version, true, Rest);
+	read_tx([{witness_marker_and_flag, <<0,1>>}, <<Version:32/little-signed>>], Version, true, Rest);
 % for non-SegWit
 read_tx(<<Version:32/little-signed, Rest/binary>>) ->
 	read_tx([<<Version:32/little-signed>>], Version, false, Rest).
 
-read_tx(TAcc, Version, _HasWitnessQ, Rest) ->
+read_tx(TAcc, Version, HasWitnessQ, Rest) ->
 	{TAcc1, TxInCount, Rest1} = read_var_int(TAcc, Rest),
 	{TAcc2, TxIns, Rest2} = read_tx_in_n(TAcc1, Rest1, TxInCount),
 	{TAcc3, TxOutCount, Rest3} = read_var_int(TAcc2, Rest2),
 	{TAcc4, TxOuts, Rest4} = read_tx_out_n(TAcc3, Rest3, TxOutCount),
-	<<LockTime:32/little, Rest5/binary>> = Rest4,
-	TAcc5 = [<<LockTime:32/little>>|TAcc4],
-	T = to_template(TAcc5),
+	{TAcc5, Witnesses, Rest5} =
+		case HasWitnessQ of
+			false -> {TAcc4, [], Rest4};
+			true  ->
+				{TAccWitness, Witnesses1, RestWitness} =
+					read_witness_n([], Rest4, TxInCount),
+				WitnessBin = list_to_binary(lists:reverse(TAccWitness)),
+				{
+					[{witness, WitnessBin}|TAcc4],
+					Witnesses1,
+					RestWitness
+				}
+		end,
+	<<LockTime:32/little, Rest6/binary>> = Rest5,
+	TAcc6 = [<<LockTime:32/little>>|TAcc5],
+	T = to_template(TAcc6),
 	Txid = dhash(template_default_binary(T)),
-io:format("~p~n",[{parse_hash(Txid), Version, TxIns, TxOuts, LockTime}]),
 
-	{{parse_hash(Txid), Version, TxIns, TxOuts, LockTime, T}, Rest5}.
+	{{parse_hash(Txid), Version, TxIns, TxOuts, Witnesses, LockTime, T}, Rest6}.
 
 read_tx_n(Bin, N) -> read_tx_n([], N, Bin).
 
@@ -265,6 +280,7 @@ read_tx_n(Acc, 0, Bin) -> {lists:reverse(Acc), Bin};
 read_tx_n(Acc, N, Bin) when is_integer(N), N>0 ->
 	{Tx, Rest} = read_tx(Bin),
 	read_tx_n([Tx|Acc], N-1, Rest).
+
 
 %% create binary template for signing Tx
 %% binary fragments have been accumulated in TAcc in reverse order 
@@ -347,6 +363,32 @@ read_tx_in_n(TAcc, Acc, {N,N0}, Bin) when is_integer(N), N>0 ->
 	<<Sequence:32/little, Rest3/binary>> = Rest2,
 	TAcc3 = [<<Sequence:32/little>>|TAcc2],
 	read_tx_in_n(TAcc3, [{N0-(N-1), parse_outpoint(PreviousOutput), script:parse_scriptSig(SignatureScript), Sequence}|Acc], {N-1,N0}, Rest3).
+
+
+%% Witness
+%% Its count is equal to that of TxIns.
+%% see BIP-144
+%% see BIP-141 for witness data structure ("witness data is NOT script")
+read_witness_n(TAcc, Bin, N) ->
+	read_witness_n(TAcc, [], N, Bin).
+
+read_witness_n(TAcc, Acc, 0, Bin) -> {TAcc, lists:reverse(Acc), Bin};
+read_witness_n(TAcc, Acc, N, Bin) when is_integer(N), N>0 ->
+	{TAcc1, StackItemCounts, Rest} = read_var_int(TAcc, Bin),
+	{TAcc2, StackItems, Rest1} = read_stack_item_n(TAcc1, Rest, StackItemCounts),
+	read_witness_n(TAcc2, [StackItems|Acc], N-1, Rest1).
+
+%% <var_int><data> as defined in BIP-141
+read_stack_item_n(TAcc, Bin, N) ->
+	read_stack_item_n(TAcc, [], N, Bin).
+
+read_stack_item_n(TAcc, Acc, 0, Bin) -> {TAcc, lists:reverse(Acc), Bin};
+read_stack_item_n(TAcc, Acc, N, Bin) when is_integer(N), N>0 ->
+	{TAcc1, Length, Rest} = read_var_int(TAcc, Bin),
+	<<StackItem:Length/binary, Rest1/binary>> = Rest,
+	TAcc2 = [<<StackItem/binary>>|TAcc1],
+	read_stack_item_n(TAcc2, [StackItem|Acc], N-1, Rest1).
+
 
 %% Outpoint
 parse_outpoint(<<Hash:32/binary, Index:32/little>>) -> {parse_hash(Hash), Index}.

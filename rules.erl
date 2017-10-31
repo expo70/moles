@@ -27,7 +27,7 @@
 %% 
 %% returns a boolean vector whose elements show the
 %% result of signature verification for each TxIns.
-verify_signatures_in_Tx({_TxIdStr, _TxVersion, TxIns, _TxOuts, _LockTime, Template}=Tx) ->
+verify_signatures_in_Tx({_TxIdStr, _TxVersion, TxIns, _TxOuts, _Witnesses, _LockTime, Template}=Tx) ->
 	N_TxIns = length(TxIns),
 
 	[Indexes, Signatures, HashTypes, PublicKeys] = u:transpose([
@@ -74,12 +74,11 @@ verify_signatures_in_Tx({_TxIdStr, _TxVersion, TxIns, _TxOuts, _LockTime, Templa
 %% 
 %% For P2SH scripts, the Mark used when signinig is RedeemScript.
 %% ref: http://www.soroushjp.com/2014/12/20/bitcoin-multisig-the-hard-way-understanding-raw-multisignature-bitcoin-transactions/
-verify_signatures_in_Tx2({_TxIdStr, _TxVersion, TxIns, _TxOuts, _LockTime, Template}=Tx, Indexes) ->
+verify_signatures_in_Tx2({_TxIdStr, _TxVersion, TxIns, _TxOuts, _Witnesses, _LockTime, Template}=Tx, Indexes) ->
 	ok.
 
 
 
-%balance_of_Tx({_TxIdStr, _TxVersion, TxIns, TxOuts, _LockTime, _Template}) ->
 
 
 verify_merkle_root({{_BlockHash, _BlockVersion, _PrevBlockHash, MerkleRootHash, _Time, _Bits, _Nonce, _TxnCount}, Txns}) ->
