@@ -270,9 +270,15 @@ read_tx(TAcc, Version, HasWitnessQ, Rest) ->
 	<<LockTime:32/little, Rest6/binary>> = Rest5,
 	TAcc6 = [<<LockTime:32/little>>|TAcc5],
 	T = to_template(TAcc6),
-	Txid = dhash(template_default_binary(T)),
+	WTxid = dhash(template_default_binary(T)),
+	% when calculating traditional Txid, we skip witness-related slots
+	 Txid = dhash(template_default_binary(
+	 	template_fill_nth(
+	 		template_fill_nth(T,{witness_marker_and_flag, <<>>},any),
+			{witness, <<>>},any
+		))),
 
-	{{parse_hash(Txid), Version, TxIns, TxOuts, Witnesses, LockTime, T}, Rest6}.
+	{{{parse_hash(Txid),parse_hash(WTxid)}, Version, TxIns, TxOuts, Witnesses, LockTime, T}, Rest6}.
 
 read_tx_n(Bin, N) -> read_tx_n([], N, Bin).
 
