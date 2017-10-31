@@ -270,6 +270,8 @@ read_tx(TAcc, Version, HasWitnessQ, Rest) ->
 	<<LockTime:32/little, Rest6/binary>> = Rest5,
 	TAcc6 = [<<LockTime:32/little>>|TAcc5],
 	T = to_template(TAcc6),
+	% NOTE: wTxid of coinbase assumed to be 0, but here, 
+	% we calculate the real one.
 	WTxid = dhash(template_default_binary(T)),
 	% when calculating traditional Txid, we skip witness-related slots
 	 Txid = dhash(template_default_binary(
@@ -368,7 +370,8 @@ read_tx_in_n(TAcc, Acc, {N,N0}, Bin) when is_integer(N), N>0 ->
 	TAcc2 = [{scriptSig,<<VarIntBin/binary, SignatureScript/binary>>}|TAcc1],
 	<<Sequence:32/little, Rest3/binary>> = Rest2,
 	TAcc3 = [<<Sequence:32/little>>|TAcc2],
-	read_tx_in_n(TAcc3, [{N0-N, parse_outpoint(PreviousOutput), script:parse_scriptSig(SignatureScript), Sequence}|Acc], {N-1,N0}, Rest3).
+	%NOTE: here, internal TxIn indexes start from 1.
+	read_tx_in_n(TAcc3, [{N0-(N-1), parse_outpoint(PreviousOutput), script:parse_scriptSig(SignatureScript), Sequence}|Acc], {N-1,N0}, Rest3).
 
 
 %% Witness
@@ -409,7 +412,8 @@ read_tx_out_n(TAcc, Acc, {N,N0}, Bin) when is_integer(N), N>0 ->
 	{[VarIntBin], PkScriptLength, Rest1} = read_var_int([], Rest),
 	<<PkScript:PkScriptLength/binary, Rest2/binary>> = Rest1,
 	TAcc2 = [{scriptPubKey,<<VarIntBin/binary, PkScript/binary>>}|TAcc1],
-	read_tx_out_n(TAcc2, [{N0-N, Value, script:parse_scriptPubKey(PkScript)}|Acc], {N-1,N0}, Rest2).
+	%NOTE: here, internal TxOut indexes start from 1.
+	read_tx_out_n(TAcc2, [{N0-(N-1), Value, script:parse_scriptPubKey(PkScript)}|Acc], {N-1,N0}, Rest2).
 
 %% Block
 read_block(Bin) ->
@@ -514,7 +518,7 @@ parse_services(Acc, N, Services) when is_integer(N), N>0 ->
 				1 -> node_network;
 				2 -> node_getutxo;
 				3 -> node_bloom;
-				4 -> node_witness;
+				4 -> node_witness; % BIP-144
 				5 -> node_xthin
 			end,
 			parse_services([H|Acc], N-1, Services)
@@ -706,8 +710,17 @@ parse_difficulty_target(N) ->
 
 %% SegWit (segregated witness) supports
 %% BIP141 - bit1
-is_SegWit_block_version(BlockVersion) -> BlockVersion band 16#40000000 /= 0.
+%is_SegWit_block_version(BlockVersion) -> BlockVersion band 16#40000000 /= 0.
 
+
+%% Commitment struture
+%% ref: BIP-141
+witness_root_hash_from_coinbaseTx({_TxIdStr, _TxVersion, TxIns, TxOuts, _Witnesses, _LockTime, _Template}) ->
+	FirstTxIn = hd(TxIns),
+	{0,{"0000000000000000000000000000000000000000000000000000000000000000",_}, _,_} = FirstTxIn, % ensure the identity of conbase
+	HashCandidates = [H || {_,_,{scriptPubKey,{op_return,<<16#aa,16#21,16#a9,16#ed,H:32/binary,_/binary>>}}} <- TxOuts],
+	% If there are more than one scriptPubKey matching the pattern, the one with highest output index is assumed to be the Commitment (BIP-141).
+	lists:last(HashCandidates).
 
 
 -ifdef(EUNIT).
@@ -792,8 +805,8 @@ parse_difficulty_target_test_() ->
 
 is_SegWit_block_version_() ->
 	[
-		?_assertEqual(is_SegWit_block_version(16#40000002), true),
-		?_assertEqual(is_SegWit_block_version(2), false)
+%		?_assertEqual(is_SegWit_block_version(16#40000002), true),
+%		?_assertEqual(is_SegWit_block_version(2), false)
 	].
 
 -endif.
