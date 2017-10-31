@@ -368,7 +368,7 @@ read_tx_in_n(TAcc, Acc, {N,N0}, Bin) when is_integer(N), N>0 ->
 	TAcc2 = [{scriptSig,<<VarIntBin/binary, SignatureScript/binary>>}|TAcc1],
 	<<Sequence:32/little, Rest3/binary>> = Rest2,
 	TAcc3 = [<<Sequence:32/little>>|TAcc2],
-	read_tx_in_n(TAcc3, [{N0-(N-1), parse_outpoint(PreviousOutput), script:parse_scriptSig(SignatureScript), Sequence}|Acc], {N-1,N0}, Rest3).
+	read_tx_in_n(TAcc3, [{N0-N, parse_outpoint(PreviousOutput), script:parse_scriptSig(SignatureScript), Sequence}|Acc], {N-1,N0}, Rest3).
 
 
 %% Witness
@@ -409,7 +409,7 @@ read_tx_out_n(TAcc, Acc, {N,N0}, Bin) when is_integer(N), N>0 ->
 	{[VarIntBin], PkScriptLength, Rest1} = read_var_int([], Rest),
 	<<PkScript:PkScriptLength/binary, Rest2/binary>> = Rest1,
 	TAcc2 = [{scriptPubKey,<<VarIntBin/binary, PkScript/binary>>}|TAcc1],
-	read_tx_out_n(TAcc2, [{N0-(N-1), Value, script:parse_scriptPubKey(PkScript)}|Acc], {N-1,N0}, Rest2).
+	read_tx_out_n(TAcc2, [{N0-N, Value, script:parse_scriptPubKey(PkScript)}|Acc], {N-1,N0}, Rest2).
 
 %% Block
 read_block(Bin) ->
