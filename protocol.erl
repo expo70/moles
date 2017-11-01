@@ -269,17 +269,19 @@ read_tx(TAcc, Version, HasWitnessQ, Rest) ->
 		end,
 	<<LockTime:32/little, Rest6/binary>> = Rest5,
 	TAcc6 = [<<LockTime:32/little>>|TAcc5],
-	T = to_template(TAcc6),
+	T = [{tx, to_template(TAcc6)}],
 	% NOTE: wTxid of coinbase assumed to be 0, but here, 
 	% we calculate the real one.
 	WTxid = dhash(template_default_binary(T)),
 	% when calculating traditional Txid, we skip witness-related slots
+	[{tx, T1}] = T,
+	T2 = template_fill_nth(T1, {tx_in,  fun(X)->X end}, any),
+	T3 = template_fill_nth(T2, {tx_out, fun(X)->X end}, any),
 	 Txid = dhash(template_default_binary(
 	 	template_fill_nth(
-	 		template_fill_nth(T,{witness_marker_and_flag, <<>>},any),
+	 		template_fill_nth(T3,{witness_marker_and_flag, <<>>},any),
 			{witness, <<>>},any
 		))),
-
 	{{{parse_hash(Txid),parse_hash(WTxid)}, Version, TxIns, TxOuts, Witnesses, LockTime, T}, Rest6}.
 
 read_tx_n(Bin, N) -> read_tx_n([], N, Bin).
@@ -312,10 +314,14 @@ concatenate_binaries(Acc, [H|T]) when is_binary(H) ->
 			concatenate_binaries([<<H1/binary,H/binary>>|T1], T)
 	end.
 
-template_default_binary(T) -> template_default_binary(<<>>, T).
+
+template_default_binary(Template) -> template_default_binary(<<>>, Template).
 
 template_default_binary(Acc, []) -> Acc;
-template_default_binary(Acc, [{S,B}=_H|T]) when is_atom(S) ->
+template_default_binary(Acc, [{S,B}=_T|T]) when is_atom(S), is_binary(B) ->
+	template_default_binary(<<Acc/binary,B/binary>>, T);
+template_default_binary(Acc, [{S,V}=_H|T]) when is_atom(S) ->
+	B = template_default_binary(V),
 	template_default_binary(<<Acc/binary,B/binary>>, T);
 template_default_binary(Acc, [H|T]) when is_binary(H) ->
 	template_default_binary(<<Acc/binary,H/binary>>, T).
@@ -330,7 +336,7 @@ template_default_binary(Acc, [H|T]) when is_binary(H) ->
 template_fill_nth(Template, {SlotName, X}, N) ->
 	template_fill_nth({[], 1}, Template, {SlotName, X}, N).
 
-template_fill_nth({Acc,_}, [], {_, _}, _) -> lists:reverse(Acc);
+template_fill_nth({Acc,_}, [], {_, _}, _) -> lists:flatten(lists:reverse(Acc));
 template_fill_nth({Acc,Next}, [{S,B}=H|T], {SlotName, X}, N) when is_atom(S) ->
 	{Acc1, Next1} = 
 	if
@@ -364,14 +370,14 @@ read_tx_in_n(TAcc, Bin, N) ->
 read_tx_in_n(TAcc, Acc, {0,_ }, Bin) -> {TAcc, lists:reverse(Acc), Bin};
 read_tx_in_n(TAcc, Acc, {N,N0}, Bin) when is_integer(N), N>0 ->
 	<<PreviousOutput:36/binary, Rest/binary>> = Bin,
-	TAcc1 = [PreviousOutput|TAcc],
+	TAcc1 = [PreviousOutput|[]],
 	{[VarIntBin], ScriptLength, Rest1} = read_var_int([], Rest),
 	<<SignatureScript:ScriptLength/binary, Rest2/binary>> = Rest1,
 	TAcc2 = [{scriptSig,<<VarIntBin/binary, SignatureScript/binary>>}|TAcc1],
 	<<Sequence:32/little, Rest3/binary>> = Rest2,
 	TAcc3 = [<<Sequence:32/little>>|TAcc2],
 	%NOTE: here, internal TxIn indexes start from 1.
-	read_tx_in_n(TAcc3, [{N0-(N-1), parse_outpoint(PreviousOutput), script:parse_scriptSig(SignatureScript), Sequence}|Acc], {N-1,N0}, Rest3).
+	read_tx_in_n([{tx_in, to_template(TAcc3)}|TAcc], [{N0-(N-1), parse_outpoint(PreviousOutput), script:parse_scriptSig(SignatureScript), Sequence}|Acc], {N-1,N0}, Rest3).
 
 
 %% Witness
@@ -408,12 +414,12 @@ read_tx_out_n(TAcc, Bin, N) -> read_tx_out_n(TAcc, [], {N,N}, Bin).
 read_tx_out_n(TAcc, Acc, {0, _}, Bin) -> {TAcc, lists:reverse(Acc), Bin};
 read_tx_out_n(TAcc, Acc, {N,N0}, Bin) when is_integer(N), N>0 ->
 	<<Value:64/little, Rest/binary>> = Bin, % in satoshis
-	TAcc1 = [<<Value:64/little>>|TAcc],
+	TAcc1 = [<<Value:64/little>>|[]],
 	{[VarIntBin], PkScriptLength, Rest1} = read_var_int([], Rest),
 	<<PkScript:PkScriptLength/binary, Rest2/binary>> = Rest1,
 	TAcc2 = [{scriptPubKey,<<VarIntBin/binary, PkScript/binary>>}|TAcc1],
 	%NOTE: here, internal TxOut indexes start from 1.
-	read_tx_out_n(TAcc2, [{N0-(N-1), Value, script:parse_scriptPubKey(PkScript)}|Acc], {N-1,N0}, Rest2).
+	read_tx_out_n([{tx_out, to_template(TAcc2)}|TAcc], [{N0-(N-1), Value, script:parse_scriptPubKey(PkScript)}|Acc], {N-1,N0}, Rest2).
 
 %% Block
 read_block(Bin) ->

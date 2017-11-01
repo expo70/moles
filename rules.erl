@@ -27,7 +27,7 @@
 %% 
 %% returns a boolean vector whose elements show the
 %% result of signature verification for each TxIns.
-verify_signatures_in_Tx({_TxIdStr, _TxVersion, TxIns, _TxOuts, _Witnesses, _LockTime, Template}=Tx) ->
+verify_signatures_in_Tx({_TxIdStr, _TxVersion, TxIns, _TxOuts, _Witnesses, _LockTime, [{tx, Template}]}=Tx) ->
 	N_TxIns = length(TxIns),
 
 	[Indexes, Signatures, HashTypes, PublicKeys] = u:transpose([
@@ -49,17 +49,19 @@ verify_signatures_in_Tx({_TxIdStr, _TxVersion, TxIns, _TxOuts, _Witnesses, _Lock
 	%% an easy alternative.
 	Marks = [protocol:start_with_var_int(script:create_P2PKH_scriptPubKey(P,compressed)) || P <- PublicKeys],
 
+	T1 = protocol:template_fill_nth(Template, {tx_in,  fun(X)->X end}, any),
+	T2 = protocol:template_fill_nth(T1      , {tx_out, fun(X)->X end}, any),
 	% makes scriptPubKey slots are filled by the original binaries
-	TemplateSig = protocol:template_fill_nth(Template, {scriptPubKey, fun(X)->X end}, any),
+	TemplateSig = protocol:template_fill_nth(T2, {scriptPubKey, fun(X)->X end}, any),
 	SignedHashes =
 		[protocol:dhash(
 			%% procedure when HashType == SIGHASH_ALL(1)
 			begin
-			T  = protocol:template_fill_nth(TemplateSig,
+			T3 = protocol:template_fill_nth(TemplateSig,
 					{scriptSig, lists:nth(N, Marks)},N),
-			T1 = protocol:template_fill_nth(T,
+			T4 = protocol:template_fill_nth(T3,
 					{scriptSig, protocol:var_int(0)},any),
-			B = protocol:template_to_binary(T1),
+			B = protocol:template_to_binary(T4),
 			HT = lists:nth(N, HashTypes),
 			<<B/binary, HT:32/little>> % HashType should be appended
 			end
@@ -74,7 +76,7 @@ verify_signatures_in_Tx({_TxIdStr, _TxVersion, TxIns, _TxOuts, _Witnesses, _Lock
 %% 
 %% For P2SH scripts, the Mark used when signinig is RedeemScript.
 %% ref: http://www.soroushjp.com/2014/12/20/bitcoin-multisig-the-hard-way-understanding-raw-multisignature-bitcoin-transactions/
-verify_signatures_in_Tx2({_TxIdStr, _TxVersion, TxIns, _TxOuts, _Witnesses, _LockTime, Template}=Tx, Indexes) ->
+verify_signatures_in_Tx2({_TxIdStr, _TxVersion, TxIns, _TxOuts, _Witnesses, _LockTime, [{tx,Template}]}=Tx, Indexes) ->
 	ok.
 
 
@@ -82,8 +84,19 @@ verify_signatures_in_Tx2({_TxIdStr, _TxVersion, TxIns, _TxOuts, _Witnesses, _Loc
 
 
 verify_merkle_root({{_BlockHash, _BlockVersion, _PrevBlockHash, MerkleRootHash, _Time, _Bits, _Nonce, _TxnCount}, Txns}) ->
-	Txids = [protocol:hash(TxidStr) || {TxidStr,_,_,_,_,_} <- Txns],
+	Txids = [protocol:hash(TxidStr) || {{TxidStr,_},_,_,_,_,_,_} <- Txns],
 	protocol:hash(MerkleRootHash) == protocol:merkle_hash(Txids).
+
+
+%% Merkle hash of the wTxid tree is stored in coinbase's scriptPubKey
+%% for backward compatibility reasons.
+%% wTxid of coinbase is assumed to be 0.
+%% ref: BIP-141
+%% which completely resolves Trasaction Malleability problem
+verify_witness_root(WitnessRootHash, {{_BlockHash, _BlockVersion, _PrevBlockHash, _MerkleRootHash, _Time, _Bits, _Nonce, _TxnCount}, Txns}) ->
+	WTxids  = [protocol:hash(WTxidStr) || {{_,WTxidStr},_,_,_,_,_,_} <- Txns],
+	WTxids1 = [0|tl(WTxids)],
+	protocol:hash(WitnessRootHash) == protocol:merkle_hash(WTxids1).
 
 
 %% Difficulty-1 (the minimum allowed difficulty)
