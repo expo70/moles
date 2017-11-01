@@ -49,19 +49,20 @@ verify_signatures_in_Tx({_TxIdStr, _TxVersion, TxIns, _TxOuts, _Witnesses, _Lock
 	%% an easy alternative.
 	Marks = [protocol:start_with_var_int(script:create_P2PKH_scriptPubKey(P,compressed)) || P <- PublicKeys],
 
+	%% procedure when HashType == SIGHASH_ALL(1)
+	% use all the TxIns/TxOuts
 	T1 = protocol:template_fill_nth(Template, {tx_in,  fun(X)->X end}, any),
 	T2 = protocol:template_fill_nth(T1      , {tx_out, fun(X)->X end}, any),
 	% makes scriptPubKey slots are filled by the original binaries
 	TemplateSig = protocol:template_fill_nth(T2, {scriptPubKey, fun(X)->X end}, any),
 	SignedHashes =
 		[protocol:dhash(
-			%% procedure when HashType == SIGHASH_ALL(1)
 			begin
-			T3 = protocol:template_fill_nth(TemplateSig,
+			TS1 = protocol:template_fill_nth(TemplateSig,
 					{scriptSig, lists:nth(N, Marks)},N),
-			T4 = protocol:template_fill_nth(T3,
+			TS2 = protocol:template_fill_nth(TS1,
 					{scriptSig, protocol:var_int(0)},any),
-			B = protocol:template_to_binary(T4),
+			B = protocol:template_to_binary(TS2),
 			HT = lists:nth(N, HashTypes),
 			<<B/binary, HT:32/little>> % HashType should be appended
 			end
@@ -110,7 +111,8 @@ minimum_difficulty_target(regtest) ->
 -ifdef(EUNIT).
 
 verify_signatures_in_Tx_sub() ->
-	{ok, Bin} = file:read_file("/home/kanso/.bitcoin/testnet3/blocks/blk00002.dat"),
+	BlockFilePath = filename:join(os:getenv("HOME"), ".bitcoin/testnet3/blocks/blk00002.dat"),
+	{ok, Bin} = file:read_file(BlockFilePath),
 	{_,Block,_}=protocol:read_blockdump(Bin),
 	{{_BlockHeader, Txs}, _Rest} = Block, 
 	[_T1,T2,_T3,_T4,_T5,_T6,_T7] = Txs,
