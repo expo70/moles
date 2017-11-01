@@ -5,10 +5,12 @@
 
 -compile(export_all).
 
+-define(HASH256_ZERO, "0000000000000000000000000000000000000000000000000000000000000000").
 
 %% Critical limitations
 %% bitcoin/src/consensus/consensus.h
 %%-define(
+-define(COINBASE_MATURITY, 100).
 
 
 %% Verifying Signatures on Tx
@@ -96,15 +98,23 @@ verify_merkle_root({{_BlockHash, _BlockVersion, _PrevBlockHash, MerkleRootHash, 
 	protocol:hash(MerkleRootHash) == protocol:merkle_hash(Txids).
 
 
-%% Merkle hash of the wTxid tree is stored in coinbase's scriptPubKey
+%% Witness root hash (Merkle hash of the wTxid tree) is concatenated with
+%% Witness reserved value and double-sha256 hashed to obtain Commitment hash,
+%% which is stored in coinbase's scriptPubKey
 %% for backward compatibility reasons.
 %% wTxid of coinbase is assumed to be 0.
 %% ref: BIP-141
 %% which completely resolves Trasaction Malleability problem
-verify_witness_root(WitnessRootHash, {{_BlockHash, _BlockVersion, _PrevBlockHash, _MerkleRootHash, _Time, _Bits, _Nonce, _TxnCount}, Txns}) ->
+witness_root_hash({{_BlockHash, _BlockVersion, _PrevBlockHash, _MerkleRootHash, _Time, _Bits, _Nonce, _TxnCount}, Txns}) ->
 	WTxids  = [protocol:hash(WTxidStr) || {{_,WTxidStr},_,_,_,_,_,_} <- Txns],
-	WTxids1 = [0|tl(WTxids)],
-	protocol:hash(WitnessRootHash) == protocol:merkle_hash(WTxids1).
+	WTxids1 = [protocol:hash(?HASH256_ZERO)|tl(WTxids)],
+	protocol:merkle_hash(WTxids1).
+
+verify_witness_root({CommitmentHash, WitnessReservedValue}, Block) ->
+	WitnessRootHash = witness_root_hash(Block),
+	protocol:dhash(<<WitnessRootHash/binary, WitnessReservedValue/binary>>) == CommitmentHash.
+
+
 
 
 %% Difficulty-1 (the minimum allowed difficulty)
@@ -114,6 +124,24 @@ minimum_difficulty_target(testnet) ->
 	protocol:parse_difficulty_target(16#1d00ffff);
 minimum_difficulty_target(regtest) ->
 	protocol:parse_difficulty_target(16#207fffff).
+
+
+%% Value (in satoshi)
+total_output_value(TxOuts) ->
+	Values = [V || {_Idx,V,_Script} <- TxOuts],
+	lists:sum(Values).
+
+%total_input_value(TxIns, BlockChain) ->
+
+
+%% ref: https://en.bitcoin.it/wiki/Protocol_rules
+%% To check the validity of Tx, we need access to the blockchain.
+%check_Tx({}=Tx, BlockChain) ->
+%	C1 = {tx_in_counts,  length(TxIns)>0},
+%	C2 = {tx_out_counts, length(TxOuts)>0},
+%	C3 = {
+
+
 
 -ifdef(EUNIT).
 

@@ -422,6 +422,8 @@ read_tx_out_n(TAcc, Acc, {N,N0}, Bin) when is_integer(N), N>0 ->
 	read_tx_out_n([{tx_out, to_template(TAcc2)}|TAcc], [{N0-(N-1), Value, script:parse_scriptPubKey(PkScript)}|Acc], {N-1,N0}, Rest2).
 
 %% Block
+%%
+%% Version - also used in soft fork process (BIP-9)
 read_block(Bin) ->
 	{{_Hash, _Version, _PrevBlockHash, _MerkleRootHash, _Timestamp, _Bits, _Nonce, TxnCount}=BlockHeader, Rest} = read_block_header(Bin),
 	{Txs, Rest1} = read_tx_n(Rest, TxnCount),
@@ -721,12 +723,14 @@ parse_difficulty_target(N) ->
 
 %% Commitment struture
 %% ref: BIP-141
-witness_root_hash_from_coinbaseTx({_TxIdStr, _TxVersion, TxIns, TxOuts, _Witnesses, _LockTime, _Template}) ->
+commitment_hash_from_coinbaseTx({_TxIdStr, _TxVersion, TxIns, TxOuts, Witness, _LockTime, _Template}) ->
 	FirstTxIn = hd(TxIns),
-	{0,{"0000000000000000000000000000000000000000000000000000000000000000",_}, _,_} = FirstTxIn, % ensure the identity of conbase
+	{1,{"0000000000000000000000000000000000000000000000000000000000000000",_}, _,_} = FirstTxIn, % ensure the identity of conbase
+	[[<<WitnessReservedValue:32/binary>>]] = Witness,
+
 	HashCandidates = [H || {_,_,{scriptPubKey,{op_return,<<16#aa,16#21,16#a9,16#ed,H:32/binary,_/binary>>}}} <- TxOuts],
 	% If there are more than one scriptPubKey matching the pattern, the one with highest output index is assumed to be the Commitment (BIP-141).
-	lists:last(HashCandidates).
+	{lists:last(HashCandidates), WitnessReservedValue}.
 
 
 -ifdef(EUNIT).
