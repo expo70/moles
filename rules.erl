@@ -29,14 +29,20 @@
 %% result of signature verification for each TxIns.
 verify_signatures_in_Tx({_TxIdStr, _TxVersion, TxIns, _TxOuts, _Witnesses, _LockTime, [{tx, Template}]}=Tx) ->
 	N_TxIns = length(TxIns),
-
-	[Indexes, Signatures, HashTypes, PublicKeys] = u:transpose([
+	
+	ToProcess = 
+	[
 		[Idx,S,1,P] || {Idx, _PreviousOutput, {scriptSig, {{sig, S, 1},{pubKey, P}}}, _Sequence} <- TxIns
-	]),
+	],
+	[Indexes, Signatures, HashTypes, PublicKeys] =
+		case ToProcess of
+			[ ] -> [[],[],[],[]];
+			 _  -> u:transpose(ToProcess)
+		end,
 	Delegated =
 	if
 		length(Signatures) /= N_TxIns ->
-			Unfiltered = u:subtract_range(lists:seq(0,N_TxIns), Indexes),
+			Unfiltered = u:subtract_range(u:range(N_TxIns), Indexes),
 			[Unfiltered, verify_signatures_in_Tx2(Tx, Unfiltered)];
 		length(Signatures) == N_TxIns -> [[],[]]
 	end,
@@ -78,7 +84,8 @@ verify_signatures_in_Tx({_TxIdStr, _TxVersion, TxIns, _TxOuts, _Witnesses, _Lock
 %% For P2SH scripts, the Mark used when signinig is RedeemScript.
 %% ref: http://www.soroushjp.com/2014/12/20/bitcoin-multisig-the-hard-way-understanding-raw-multisignature-bitcoin-transactions/
 verify_signatures_in_Tx2({_TxIdStr, _TxVersion, TxIns, _TxOuts, _Witnesses, _LockTime, [{tx,Template}]}=Tx, Indexes) ->
-	ok.
+	io:format("~p~n",[Indexes]),
+	throw(debug).
 
 
 
