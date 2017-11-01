@@ -35,7 +35,8 @@ hexstr_to_bin(Str,Sep) ->
 
 read_rawhex_file(Path) ->
 	{ok,Bin} = file:read_file(Path),
-	hexstr_to_bin(binary_to_list(Bin)).
+	L = [Byte || Byte <- binary_to_list(Bin), lists:member(Byte,[$0,$1,$2,$3,$4,$5,$6,$7,$8,$9,$a,$b,$c,$d,$e,$f,$A,$B,$C,$D,$E,$F])],
+	hexstr_to_bin(L).
 
 
 
