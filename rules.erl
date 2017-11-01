@@ -59,10 +59,9 @@ verify_signatures_in_Tx({_TxIdStr, _TxVersion, TxIns, _TxOuts, _Witnesses, _Lock
 
 	%% procedure when HashType == SIGHASH_ALL(1)
 	% use all the TxIns/TxOuts
-	T1 = protocol:template_fill_nth(Template, {tx_in,  fun(X)->X end}, any),
-	T2 = protocol:template_fill_nth(T1      , {tx_out, fun(X)->X end}, any),
 	% makes scriptPubKey slots are filled by the original binaries
-	TemplateSig = protocol:template_fill_nth(T2, {scriptPubKey, fun(X)->X end}, any),
+	TemplateSig = protocol:template_default_binary_for_slots(Template, 
+		[tx_in, tx_out, scriptPubKey]),
 	SignedHashes =
 		[protocol:dhash(
 			begin
@@ -86,8 +85,27 @@ verify_signatures_in_Tx({_TxIdStr, _TxVersion, TxIns, _TxOuts, _Witnesses, _Lock
 %% For P2SH scripts, the Mark used when signinig is RedeemScript.
 %% ref: http://www.soroushjp.com/2014/12/20/bitcoin-multisig-the-hard-way-understanding-raw-multisignature-bitcoin-transactions/
 verify_signatures_in_Tx2({_TxIdStr, _TxVersion, TxIns, _TxOuts, _Witnesses, _LockTime, [{tx,Template}]}=Tx, Indexes) ->
-	io:format("~p~n",[Indexes]),
-	throw(debug).
+	io:format("input = ~p~n",[Indexes]),
+	ToProcess = 
+	[
+		[Idx,Sigs,Re] || {Idx, _PreviousOutput, {scriptSig, {{multisig, Sigs},{redeemScript, Re}}}, _Sequence} <- TxIns
+	],
+	[Indexes1, MultiSignatures, RedeemScripts] =
+		case ToProcess of
+			[ ] -> [[],[],[],[]];
+			 _  -> u:transpose(ToProcess)
+		end,
+	Delegated =
+	if
+		length(Indexes1) /= length(Indexes) ->
+			Unfiltered = u:subtract_range(Indexes, Indexes1),
+			%[Unfiltered, verify_signatures_in_Tx3(Tx, Unfiltered)];
+			%throw(Unfiltered);
+			ok;
+		length(Indexes1) == length(Indexes) -> [[],[]]
+	end,
+	Indexes1.
+	%% This is what fills in scriptSig slots when signing.
 
 
 
@@ -102,7 +120,7 @@ verify_merkle_root({{_BlockHash, _BlockVersion, _PrevBlockHash, MerkleRootHash, 
 %% Witness reserved value and double-sha256 hashed to obtain Commitment hash,
 %% which is stored in coinbase's scriptPubKey
 %% for backward compatibility reasons.
-%% wTxid of coinbase is assumed to be 0.
+%% wTxid of coinbase is assumed to be <<0,...,0>>.
 %% ref: BIP-141
 %% which completely resolves Trasaction Malleability problem
 witness_root_hash({{_BlockHash, _BlockVersion, _PrevBlockHash, _MerkleRootHash, _Time, _Bits, _Nonce, _TxnCount}, Txns}) ->
@@ -145,19 +163,27 @@ total_output_value(TxOuts) ->
 
 -ifdef(EUNIT).
 
+%% P2PKH
 verify_signatures_in_Tx_sub() ->
 	BlockFilePath = filename:join(os:getenv("HOME"), ".bitcoin/testnet3/blocks/blk00002.dat"),
 	{ok, Bin} = file:read_file(BlockFilePath),
 	{_,Block,_}=protocol:read_blockdump(Bin),
 	{{_BlockHeader, Txs}, _Rest} = Block, 
 	[_T1,T2,_T3,_T4,_T5,_T6,_T7] = Txs,
-	?assertEqual(lists:all(fun({_,X})->X end, verify_signatures_in_Tx(T2)), true),
+	?assert(lists:all(fun({_,X})->X end, verify_signatures_in_Tx(T2))),
 	ok.
 
 verify_signatures_in_Tx_test_() ->
 	[
 		{timeout, 10, fun verify_signatures_in_Tx_sub/0}
 	].
+
+%% P2SH & multisig
+verify_signatures_in_Tx_sub2() ->
+	TxFilePath = filename:join(os:getenv("HOME"), "moles/test-txs/e0d9e3f42b5bc6ef100514428c0a6306d073a0070035659c6e1b33dcd5827176.rawhex"),
+	{T,_} = protocol:read_tx(u:read_rawhex_file(TxFilePath)),
+
+	ok.
 
 
 

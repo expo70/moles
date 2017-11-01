@@ -326,6 +326,11 @@ template_default_binary(Acc, [{S,V}=_H|T]) when is_atom(S) ->
 template_default_binary(Acc, [H|T]) when is_binary(H) ->
 	template_default_binary(<<Acc/binary,H/binary>>, T).
 
+template_default_binary_for_slots(Template, []) -> Template;
+template_default_binary_for_slots(Template, [SlotName|T]) when is_atom(SlotName) ->
+	Template1 = template_fill_nth(Template, {SlotName, fun(X)->X end}, any),
+	template_default_binary_for_slots(Template1, T).
+
 
 %% template utilities for signature manipulations
 %% fills n-th slots that match the input slot name
