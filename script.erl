@@ -58,7 +58,7 @@ parse_scriptPubKey(<<?OP_RETURN, Rest/binary>> =Script) ->
 		length(Pushes) == 1 ->
 			<<>> = Rest1,
 			{push, Bin} = hd(Pushes),
-			{scriptPubkey, {op_return, Bin}};
+			{scriptPubKey, {op_return, Bin}};
 		true -> {scriptSig, {unknown, Script}}
 	end;
 parse_scriptPubKey(Bin) ->
@@ -110,6 +110,18 @@ parse_scriptSig(Script) ->
 			;
 		 _ -> {scriptSig, {unknown, Script}}   
 	end.
+
+%% assumes P2SH multisig
+parse_redeemScript(Script) ->
+	{Pushes,Rest} = read_PUSHes(Script),
+	<<?OP_CHECKMULTISIG>> = Rest,
+	Parameters = lists:reverse(Pushes),
+	{push, M} = hd(Parameters),
+	{push, N} = hd(Pushes),
+	PubKeys = [{pubKey,ecdsa:parse_public_key(P)} || {push,P} <- tl(lists:reverse(tl(Pushes)))], % in-between
+	{p2sh_multisig, {M,N}, PubKeys}.
+
+
 
 
 is_PUSH(OpCode) -> (OpCode =< 96) andalso (OpCode /= 80).

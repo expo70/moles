@@ -67,3 +67,15 @@ partition(N, N, L, Acc) ->
 partition(N, X, [H|T], Acc) ->
 	partition(N, X+1, T, [H|Acc]).
 
+
+%% Count
+%% count specific item in a list
+count(L, Item) -> count(0, L, Item).
+
+count(Count, [], Item) -> Count;
+count(Count, [H|T], Item) ->
+	case H of
+		Item -> count(Count+1,T,Item);
+		_    -> count(Count,  T,Item)
+	end.
+

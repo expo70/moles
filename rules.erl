@@ -45,8 +45,8 @@ verify_signatures_in_Tx({_TxIdStr, _TxVersion, TxIns, _TxOuts, _Witnesses, _Lock
 	if
 		length(Signatures) /= N_TxIns ->
 			Unfiltered = u:subtract_range(u:range(N_TxIns), Indexes),
-			[Unfiltered, verify_signatures_in_Tx2(Tx, Unfiltered)];
-		length(Signatures) == N_TxIns -> [[],[]]
+			verify_signatures_in_Tx2(Tx, Unfiltered);
+		length(Signatures) == N_TxIns -> []
 	end,
 	
 	%% This is what fills in scriptSig slots when signing.
@@ -60,6 +60,7 @@ verify_signatures_in_Tx({_TxIdStr, _TxVersion, TxIns, _TxOuts, _Witnesses, _Lock
 	%% procedure when HashType == SIGHASH_ALL(1)
 	% use all the TxIns/TxOuts
 	% makes scriptPubKey slots are filled by the original binaries
+	% When serializing for signing, witness-related slots are ignored.
 	TemplateSig = protocol:template_default_binary_for_slots(Template, 
 		[tx_in, tx_out, scriptPubKey]),
 	SignedHashes =
@@ -78,14 +79,12 @@ verify_signatures_in_Tx({_TxIdStr, _TxVersion, TxIns, _TxOuts, _Witnesses, _Lock
 	V = lists:zipwith3(fun(S,H,P) -> ecdsa:verify_signature(S,H,P) end,
 		Signatures, SignedHashes, PublicKeys),
 	lists:sort(fun({I1,_},{I2,_}) -> I1=<I2 end, 
-		lists:zip(Indexes,V) ++ apply(lists,zip,Delegated)).
+		lists:zip(Indexes,V) ++ Delegated).
 
-%% Verify P2SH signatures
+%% Verify P2SH multisig
 %% 
-%% For P2SH scripts, the Mark used when signinig is RedeemScript.
-%% ref: http://www.soroushjp.com/2014/12/20/bitcoin-multisig-the-hard-way-understanding-raw-multisignature-bitcoin-transactions/
 verify_signatures_in_Tx2({_TxIdStr, _TxVersion, TxIns, _TxOuts, _Witnesses, _LockTime, [{tx,Template}]}=Tx, Indexes) ->
-	io:format("input = ~p~n",[Indexes]),
+	%io:format("input = ~p~n",[Indexes]),
 	ToProcess = 
 	[
 		[Idx,Sigs,Re] || {Idx, _PreviousOutput, {scriptSig, {{multisig, Sigs},{redeemScript, Re}}}, _Sequence} <- TxIns
@@ -101,13 +100,73 @@ verify_signatures_in_Tx2({_TxIdStr, _TxVersion, TxIns, _TxOuts, _Witnesses, _Loc
 			Unfiltered = u:subtract_range(Indexes, Indexes1),
 			%[Unfiltered, verify_signatures_in_Tx3(Tx, Unfiltered)];
 			%throw(Unfiltered);
-			ok;
-		length(Indexes1) == length(Indexes) -> [[],[]]
+			%FIXME
+			[];
+
+		length(Indexes1) == length(Indexes) -> []
 	end,
-	Indexes1.
-	%% This is what fills in scriptSig slots when signing.
+	%% For P2SH scripts, the Mark used when signinig is RedeemScript.
+	%% ref: http://www.soroushjp.com/2014/12/20/bitcoin-multisig-the-hard-way-understanding-raw-multisignature-bitcoin-transactions/
+	Marks = RedeemScripts,
+	% when serializing for singning witness-related slots are ignored
+	TemplateSig = protocol:template_default_binary_for_slots(Template, 
+		[tx_in, tx_out, scriptPubKey]),
+	V = lists:zipwith3(fun(N,M,R)->verify_multisig(N,M,R,TemplateSig) end,
+		Indexes1, MultiSignatures, RedeemScripts),
+	lists:zip(Indexes1, V) ++ Delegated.
+
+verify_multisig(SlotNo, Signatures, RedeemScript, TemplateSig) ->
+		{p2sh_multisig, {Min_M,Total_N},PubKeys} = script:parse_redeemScript(RedeemScript),
+		% length(PubKeys) should be equal to Total_N
+		if
+			length(PubKeys) == Total_N -> ok;
+			length(PubKeys) /= Total_N -> throw(missing_pubkey)
+		end,
+		% OP_CHECKMULTISIG does not check the all the combinations of
+		% signatures and public keys because of its behaviour on the
+		% stack machine. Each signature on the top comsumes public keys
+		% until it finds an ECDSA match. 
+		% We emulate this behaviour.
+		VerifyFunc =
+		fun({sig, S, HashType}, {pubKey, P}) ->
+		ecdsa:verify_signature(
+			S,
+			% We only handle the case when HashType == 1.
+			% redeemScript itself (without precedent push OP) is used for 
+			% filling the pre-signed data when calculating hash.
+			protocol:dhash(
+				begin
+				LengthBin = protocol:var_int(byte_size(RedeemScript)),
+				Mark = <<LengthBin/binary, RedeemScript/binary>>,
+				TS1 = protocol:template_fill_nth(
+					TemplateSig, {scriptSig, Mark}, SlotNo),
+				TS2 = protocol:template_fill_nth(
+					TS1, {scriptSig, protocol:var_int(0)}, any),
+				B = protocol:template_to_binary(TS2),
+				HashType = 1, %NOTE: this is an assumption
+				<<B/binary, HashType:32/little>> % HashType should be appended
+				end),
+			P
+			)
+		end,
+		V = emulate_OP_CHECKMULTISIG(VerifyFunc, Signatures, PubKeys),
+		u:count(V,true) >= Min_M. % m-of-n check
 
 
+% a stack machine for OP_CHECKMULTISIG
+emulate_OP_CHECKMULTISIG(VerifyFunc, Signatures, PubKeys) ->
+	StackSig = lists:reverse(Signatures),
+	StackPub = lists:reverse(PubKeys),
+
+	run_CHECKMULTISIG([], VerifyFunc, StackSig, StackPub).
+
+run_CHECKMULTISIG(Acc, _, [], _) -> lists:reverse(Acc);
+run_CHECKMULTISIG(Acc, _, _, []) -> lists:reverse(Acc);
+run_CHECKMULTISIG(Acc, VerifyFunc, [Sig|SigT]=StackSig, [Pub|PubT]) ->
+	case VerifyFunc(Sig,Pub) of
+		true ->  run_CHECKMULTISIG([true |Acc], VerifyFunc, SigT,     PubT);
+		false -> run_CHECKMULTISIG([false|Acc], VerifyFunc, StackSig, PubT)
+	end.
 
 
 
