@@ -18,20 +18,31 @@ any_true([H|T])  when is_boolean(H) -> H orelse any_true(T).
 
 %% Hex string (Octets)
 %%
-bin_to_hexstr(Bin) -> error.
+bin_to_hexstr(Bin) -> bin_to_hexstr(Bin,"").
 
-bin_to_hexstr(Bin, big_endian) -> bin_to_hexstr(Bin);
-bin_to_hexstr(Bin, little_endian) -> bin_to_hexstr(
-	list_to_binary(lists:reverse(binary_to_list(Bin)))).
+bin_to_hexstr(Bin,Sep) ->
+  string:to_lower(lists:flatten(string:join([io_lib:format("~2.16.0B", [X]) ||
+      X <- binary_to_list(Bin)], Sep))).
+
+bin_to_hexstr(Bin, Sep, big) -> bin_to_hexstr(Bin,Sep);
+bin_to_hexstr(Bin, Sep, little) -> bin_to_hexstr(
+	list_to_binary(lists:reverse(binary_to_list(Bin))),Sep).
 
 hexstr_to_bin("") -> <<>>;
 hexstr_to_bin(Str) ->
 	T = partition(Str, 2),
 	list_to_binary([list_to_integer(S,16) || S <- T]).
 
+hexstr_to_bin(Str,"") -> hexstr_to_bin(Str);
 hexstr_to_bin(Str,Sep) ->
 	T = string:tokens(Str,Sep),
 	list_to_binary([list_to_integer(S,16) || S <- T]).
+
+hexstr_to_bin(Str, Sep, big) -> hexstr_to_bin(Str,Sep);
+hexstr_to_bin(Str, Sep, little) ->
+	Bin = hexstr_to_bin(Str,Sep),
+	list_to_binary(lists:reverse(binary_to_list(Bin))).
+
 
 read_rawhex_file(Path) ->
 	{ok,Bin} = file:read_file(Path),
@@ -72,10 +83,42 @@ partition(N, X, [H|T], Acc) ->
 %% count specific item in a list
 count(L, Item) -> count(0, L, Item).
 
-count(Count, [], Item) -> Count;
+count(Count, [], _) -> Count;
 count(Count, [H|T], Item) ->
 	case H of
 		Item -> count(Count+1,T,Item);
 		_    -> count(Count,  T,Item)
 	end.
+
+
+%% File System
+file_existsQ(Path) -> filelib:is_file(Path). % whether file or dir exists
+
+file_size(Path) ->
+	S = {filelib:is_regular(Path), filelib:is_dir(Path)},
+	case S of
+		{true,false} -> filelib:file_size(Path);
+		{false,true} ->
+			{ok,FileNames} = file:list_dir(Path),
+			lists:sum([file_size(filename:join(Path,F)) || F <- FileNames]);
+		{false,false} -> 0
+	end.
+
+%file_size_largest(Path,N) ->
+%	file_walk([],Path,N).
+%
+%file_walk(Acc,Path,N) ->
+%	S = {filelib:is_regular(Path), filelib:is_dir(Path)},
+%	L =
+%		case S of
+%			{true,false} ->
+%				[[{Path,filelib:file_size(Path)}], Acc];
+%			{false,true) ->
+%				{ok,FileNames} = file:list_dir(Path),
+%				LDir = [{F,filelib:file_size(F)} || F <- FileNames],
+
+%% Strings
+remove_whitespace(Str) ->
+	re:replace(Str, "\\s+", "", [global,{return,list}]).
+
 

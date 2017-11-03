@@ -437,15 +437,12 @@ read_tx_out_n(TAcc, Acc, {N,N0}, Bin) when is_integer(N), N>0 ->
 	read_tx_out_n([{tx_out, to_template(TAcc2)}|TAcc], [{N0-(N-1), Value, PkScript}|Acc], {N-1,N0}, Rest2).
 
 
-%% Values
-%% Index - 1-based
-tx_input_value({_HashStr, _Version, TxIns, _TxOuts, _Witnesses, _LockTime, _Template}=_Tx, Index, tester) ->
-	In = lists:nth(Index, TxIns),
-	{Index, {PrevOutHashStr,Index0Based}, _SigScript, _Sequence} = In,
-	Bin = tester:get_binary({tx,hash(PrevOutHashStr)},
+
+outpoint_value({HashStr,Index0Based}, tester) ->
+	Bin = tester:get_binary({tx,hash(HashStr)},
 			tester:default_config()),
 	case Bin of
-		<<>> -> throw({tx_not_found,PrevOutHashStr});
+		<<>> -> throw({tx_not_found,HashStr});
 		_    ->
 			{PrevTx,<<>>} = read_tx(Bin),
 			{_,_,_,PrevTxOuts,_,_,_} = PrevTx,
@@ -455,6 +452,45 @@ tx_input_value({_HashStr, _Version, TxIns, _TxOuts, _Witnesses, _LockTime, _Temp
 			Value
 	end.
 	
+
+%% Values
+%% Index - 1-based
+tx_input_value({_HashStr, _Version, TxIns, _TxOuts, _Witnesses, _LockTime, _Template}=_Tx, Index, tester=Env) ->
+	In = lists:nth(Index, TxIns),
+	{Index, Outpoint, _SigScript, _Sequence} = In,
+	outpoint_value(Outpoint,Env).
+
+
+tx_total_input_value({_HashStr, _Version, TxIns, _TxOuts, _Witnesses, _LockTime, _Template}=_Tx, tester=Env) ->
+	lists:sum([
+		outpoint_value(OP,Env) || {_Index,OP,_SigScript,_Sequence} <- TxIns
+	]).
+
+tx_output_value({_HashStr, _Version, _TxIns, TxOuts, _Witnesses, _LockTime, _Template}=_Tx, Index) ->
+	Out = lists:nth(Index, TxOuts),
+	{Index, Value, _PKScript} = Out,
+	Value.
+
+tx_total_output_value({_HashStr, _Version, _TxIns, TxOuts, _Witnesses, _LockTime, _Template}=_Tx) ->
+	lists:sum([Value || {_Index, Value, _PKScript} <- TxOuts]).
+
+
+tx_transaction_fee(Tx, Env) -> tx_total_input_value(Tx,Env) - tx_total_output_value(Tx).
+
+tx_transaction_byte_size({_,_,_,_,_,_,[{tx,T}]}) -> byte_size(template_default_binary(T)).
+
+tx_transaction_fee_per_byte(Tx, Env) -> tx_transaction_fee(Tx,Env)/tx_transaction_byte_size(Tx).
+
+tx_transaction_weight({_,_,_,_,_,_,[{tx,T}]}) -> 
+	T1 = template_default_binary_for_slots(T, [tx_in]),
+	WitnessRelatedSlots = [S || {Name,_Bin}=S<- T1,
+		Name=:=witness_marker_and_flag orelse Name=:=witness],
+	T2 = template_fill_nth(T1,{witness_marker_and_flag,<<>>},any),
+	T3 = template_fill_nth(T2,{witness                ,<<>>},any),
+	NonWitnessByteSize = byte_size(template_default_binary(T3)),
+	   WitnessByteSize = byte_size(template_default_binary(WitnessRelatedSlots)),
+	NonWitnessByteSize*4 + WitnessByteSize.
+
 
 %% Block
 %%
@@ -848,11 +884,19 @@ parse_difficulty_target_test_() ->
 		?_assertEqual(parse_difficulty_target(16#04123456),  16#12345600)
 	].
 
-is_SegWit_block_version_() ->
-	[
-%		?_assertEqual(is_SegWit_block_version(16#40000002), true),
-%		?_assertEqual(is_SegWit_block_version(2), false)
-	].
+tx_transaction_test() ->
+		% ref: https://en.bitcoin.it/wiki/Block_weight
+		{Tx,<<>>} = read_tx(u:hexstr_to_bin(u:remove_whitespace("
+		0100000000010115e180dc28a2327e687facc33f10f2a20da717e5548406f7ae8b4c8
+		11072f85603000000171600141d7cd6c75c2e86f4cbf98eaed221b30bd9a0b928ffff
+		ffff019caef505000000001976a9141d7cd6c75c2e86f4cbf98eaed221b30bd9a0b92
+		888ac02483045022100f764287d3e99b1474da9bec7f7ed236d6c81e793b20c4b5aa1
+		f3051b9a7daa63022016a198031d5554dbb855bdbe8534776a4be6958bd8d530dc001
+		c32b828f6f0ab0121038262a6c6cec93c2d3ecd6c6072efea86d02ff8e3328bbd0242
+		b20af3425990ac00000000"))),
+		?assertEqual(tx_transaction_byte_size(Tx), 218),
+		?assertEqual(tx_transaction_weight(Tx),    542).
+
 
 -endif.
 
