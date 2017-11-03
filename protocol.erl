@@ -254,6 +254,16 @@ read_tx(TAcc, Version, HasWitnessQ, Rest) ->
 	{TAcc2, TxIns, Rest2} = read_tx_in_n(TAcc1, Rest1, TxInCount),
 	{TAcc3, TxOutCount, Rest3} = read_var_int(TAcc2, Rest2),
 	{TAcc4, TxOuts, Rest4} = read_tx_out_n(TAcc3, Rest3, TxOutCount),
+	
+	% We parse signatures all at once here because
+	% the interpretations depend on whether the Tx has Witness. 
+	TxIns1  = [{Index,Outpoint,
+		script:parse_scriptSig(SigScript,HasWitnessQ),Sequence} ||
+		{Index,Outpoint,SigScript,Sequence}<-TxIns],
+	TxOuts1 = [{Index,Value,   
+		script:parse_scriptPubKey(PKScript,HasWitnessQ)} ||
+		{Index,Value,   PKScript}<-TxOuts],
+	
 	{TAcc5, Witnesses, Rest5} =
 		case HasWitnessQ of
 			false -> {TAcc4, [], Rest4};
@@ -282,7 +292,7 @@ read_tx(TAcc, Version, HasWitnessQ, Rest) ->
 	 		template_fill_nth(T3,{witness_marker_and_flag, <<>>},any),
 			{witness, <<>>},any
 		))),
-	{{{parse_hash(Txid),parse_hash(WTxid)}, Version, TxIns, TxOuts, Witnesses, LockTime, T}, Rest6}.
+	{{{parse_hash(Txid),parse_hash(WTxid)}, Version, TxIns1, TxOuts1, Witnesses, LockTime, T}, Rest6}.
 
 read_tx_n(Bin, N) -> read_tx_n([], N, Bin).
 
@@ -382,7 +392,7 @@ read_tx_in_n(TAcc, Acc, {N,N0}, Bin) when is_integer(N), N>0 ->
 	<<Sequence:32/little, Rest3/binary>> = Rest2,
 	TAcc3 = [<<Sequence:32/little>>|TAcc2],
 	%NOTE: here, internal TxIn indexes start from 1.
-	read_tx_in_n([{tx_in, to_template(TAcc3)}|TAcc], [{N0-(N-1), parse_outpoint(PreviousOutput), script:parse_scriptSig(SignatureScript), Sequence}|Acc], {N-1,N0}, Rest3).
+	read_tx_in_n([{tx_in, to_template(TAcc3)}|TAcc], [{N0-(N-1), parse_outpoint(PreviousOutput), SignatureScript, Sequence}|Acc], {N-1,N0}, Rest3).
 
 
 %% Witness
@@ -424,7 +434,27 @@ read_tx_out_n(TAcc, Acc, {N,N0}, Bin) when is_integer(N), N>0 ->
 	<<PkScript:PkScriptLength/binary, Rest2/binary>> = Rest1,
 	TAcc2 = [{scriptPubKey,<<VarIntBin/binary, PkScript/binary>>}|TAcc1],
 	%NOTE: here, internal TxOut indexes start from 1.
-	read_tx_out_n([{tx_out, to_template(TAcc2)}|TAcc], [{N0-(N-1), Value, script:parse_scriptPubKey(PkScript)}|Acc], {N-1,N0}, Rest2).
+	read_tx_out_n([{tx_out, to_template(TAcc2)}|TAcc], [{N0-(N-1), Value, PkScript}|Acc], {N-1,N0}, Rest2).
+
+
+%% Values
+%% Index - 1-based
+tx_input_value({_HashStr, _Version, TxIns, _TxOuts, _Witnesses, _LockTime, _Template}=_Tx, Index, tester) ->
+	In = lists:nth(Index, TxIns),
+	{Index, {PrevOutHashStr,Index0Based}, _SigScript, _Sequence} = In,
+	Bin = tester:get_binary({tx,hash(PrevOutHashStr)},
+			tester:default_config()),
+	case Bin of
+		<<>> -> throw({tx_not_found,PrevOutHashStr});
+		_    ->
+			{PrevTx,<<>>} = read_tx(Bin),
+			{_,_,_,PrevTxOuts,_,_,_} = PrevTx,
+			PrevOutIndex = Index0Based+1,
+			PrevOut = lists:nth(PrevOutIndex,PrevTxOuts),
+			{PrevOutIndex, Value, _PKScript} = PrevOut,
+			Value
+	end.
+	
 
 %% Block
 %%
