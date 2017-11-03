@@ -41,31 +41,45 @@
 %%
 %% BIP16 - https://github.com/bitcoin/bips/blob/master/bip-0016.mediawiki
 
-parse_scriptPubKey(<<?OP_DUP, ?OP_HASH160, Rest/binary>>) ->
+parse_scriptPubKey(<<?OP_DUP, ?OP_HASH160, Rest/binary>>, false=_HasWitnessQ) ->
 	{Pushes,Rest1} = read_PUSHes(Rest),
 	[{push,PubKeyHash}] = Pushes,
 	<<?OP_EQUALVERIFY, Rest2/binary>> = Rest1,
 	<<?OP_CHECKSIG>> = Rest2,
 	{scriptPubKey, {pubKeyHash, PubKeyHash}};
-parse_scriptPubKey(<<?OP_HASH160, Rest/binary>>) ->
+parse_scriptPubKey(<<?OP_HASH160, Rest/binary>>, false=_HasWitnessQ) ->
 	{Pushes,Rest1} = read_PUSHes(Rest),
 	[{push,RedeemScriptHash}] = Pushes,
 	<<?OP_EQUAL>> = Rest1,
 	{scriptPubKey, {redeemScriptHash, RedeemScriptHash}};
-parse_scriptPubKey(<<?OP_RETURN, Rest/binary>> =Script) ->
+parse_scriptPubKey(<<?OP_RETURN, Rest/binary>> =Script, false=_HasWitnessQ) ->
 	{Pushes,Rest1} = read_PUSHes(Rest),
 	if
 		length(Pushes) == 1 ->
 			<<>> = Rest1,
 			{push, Bin} = hd(Pushes),
 			{scriptPubKey, {op_return, Bin}};
-		true -> {scriptSig, {unknown, Script}}
+		true -> {scriptPubKey, {unknown, Script}}
 	end;
-parse_scriptPubKey(Bin) ->
-	{scriptPubKey, {unknown, read_PUSHes(Bin)}}.
+parse_scriptPubKey(Bin, false=_HasWitnessQ) ->
+	{scriptPubKey, {unknown, read_PUSHes(Bin)}};
+%% Version 0 Witness Program
+%% ref: BIP-141
+parse_scriptPubKey(<<16#16,16#00,16#14,KeyHash:20/binary>>, true=_HasWitnessQ) ->
+	{scriptPubKey, {nested_p2wpkh_keyHash, KeyHash}};
+parse_scriptPubKey(<<16#22,16#00,16#20,Hash:32/binary>>, true=_HasWitnessQ) ->
+	{scriptPubKey, {nested_p2wsh_hash, Hash}};
+parse_scriptPubKey(<<      16#00,16#14,KeyHash:20/binary>>, true=_HasWitnessQ) ->
+	{scriptPubKey, {native_p2wpkh_keyHash, KeyHash}};
+parse_scriptPubKey(<<      16#00,16#20,Hash:32/binary>>, true=_HasWitnessQ) ->
+	{scriptPubKey, {native_p2wsh_hash, Hash}};
+parse_scriptPubKey(<<?OP_HASH160,Hash:20/binary,?OP_EQUAL>>, true=_HasWitnessQ) ->
+	{scriptPubKey, {nested_p2w_hash, Hash}};
+%parse_scriptPubKey(<<?OP_DUP, ?OP_HASH160, 
+parse_scriptPubKey(Script, true=_HasWitnessQ) -> parse_scriptPubKey(Script, false).
 
 
-parse_scriptSig(<<0, Rest/binary>> = Script) ->
+parse_scriptSig(<<0, Rest/binary>> = Script, false=_HasWitnessQ) ->
 	{Pushes,Rest1} = read_PUSHes(Rest),
 	if
 		length(Pushes) >= 2 ->
@@ -87,7 +101,7 @@ parse_scriptSig(<<0, Rest/binary>> = Script) ->
 			};
 		true -> {scriptSig, {unknown, Script}}
 	end;
-parse_scriptSig(Script) ->
+parse_scriptSig(Script, false=_HasWitnessQ) ->
 	{Pushes,Rest1} = read_PUSHes(Script),
 	case length(Pushes) of
 		 2 ->
@@ -109,7 +123,21 @@ parse_scriptSig(Script) ->
 			%end
 			;
 		 _ -> {scriptSig, {unknown, Script}}   
-	end.
+	end;
+%% Version 0 Witness Program
+%% ref: BIP-141
+parse_scriptSig(<<>>, true=_HasWitnessQ) -> % 'native'
+	{scriptSig, {native_witness, <<>>}};
+%% 0x160014 means 
+%% var_int(22), PUSH_0, PUSH_20.
+parse_scriptSig(<<16#16,16#00,16#14,KeyHash:20/binary>>, true=_HasWitnessQ) -> % 'nested in BIP16 P2SH'
+	{scriptSig, {p2wpkh_keyHash, KeyHash}};
+%% var_int(34), PUSH_0, PUSH_32
+parse_scriptSig(<<16#22,16#00,16#20,Hash:32/binary>>, true=_HasWitnessQ) -> % 'nested in BIP16 P2SH'
+	{scriptSig, {p2wsh_hash, Hash}};
+parse_scriptSig(Script, true=_HasWitnessQ) -> parse_scriptSig(Script, false).
+
+
 
 %% assumes P2SH multisig
 parse_redeemScript(Script) ->

@@ -399,6 +399,12 @@ read_tx_in_n(TAcc, Acc, {N,N0}, Bin) when is_integer(N), N>0 ->
 %% Its count is equal to that of TxIns.
 %% see BIP-144
 %% see BIP-141 for witness data structure ("witness data is NOT script")
+%%
+%% var_int(# of Items) = X
+%% var_int(Length of Item1) Item1
+%% var_int(Length of Item2) Item2
+%% ...
+%% var_int(Length of ItemX) ItemX
 read_witness_n(TAcc, Bin, N) ->
 	read_witness_n(TAcc, [], N, Bin).
 
@@ -420,8 +426,13 @@ read_stack_item_n(TAcc, Acc, N, Bin) when is_integer(N), N>0 ->
 	read_stack_item_n(TAcc2, [StackItem|Acc], N-1, Rest1).
 
 
-%% Outpoint
+%% Outpoint (Prevout)
 parse_outpoint(<<Hash:32/binary, Index:32/little>>) -> {parse_hash(Hash), Index}.
+
+outpoint({HashStr,Index}) ->
+	Hash = hash(HashStr),
+	<<Hash:32/binary, Index:32/little>>.
+
 
 %% TxOut
 read_tx_out_n(TAcc, Bin, N) -> read_tx_out_n(TAcc, [], {N,N}, Bin).
@@ -482,12 +493,11 @@ tx_transaction_byte_size({_,_,_,_,_,_,[{tx,T}]}) -> byte_size(template_default_b
 tx_transaction_fee_per_byte(Tx, Env) -> tx_transaction_fee(Tx,Env)/tx_transaction_byte_size(Tx).
 
 tx_transaction_weight({_,_,_,_,_,_,[{tx,T}]}) -> 
-	T1 = template_default_binary_for_slots(T, [tx_in]),
-	WitnessRelatedSlots = [S || {Name,_Bin}=S<- T1,
+	WitnessRelatedSlots = [S || {Name,_Bin}=S<- T,
 		Name=:=witness_marker_and_flag orelse Name=:=witness],
-	T2 = template_fill_nth(T1,{witness_marker_and_flag,<<>>},any),
-	T3 = template_fill_nth(T2,{witness                ,<<>>},any),
-	NonWitnessByteSize = byte_size(template_default_binary(T3)),
+	T1 = template_fill_nth(T, {witness_marker_and_flag,<<>>},any),
+	T2 = template_fill_nth(T1,{witness                ,<<>>},any),
+	NonWitnessByteSize = byte_size(template_default_binary(T2)),
 	   WitnessByteSize = byte_size(template_default_binary(WitnessRelatedSlots)),
 	NonWitnessByteSize*4 + WitnessByteSize.
 

@@ -91,29 +91,27 @@ verify_signatures_in_Tx2({_TxIdStr, _TxVersion, TxIns, _TxOuts, _Witnesses, _Loc
 	],
 	[Indexes1, MultiSignatures, RedeemScripts] =
 		case ToProcess of
-			[ ] -> [[],[],[],[]];
+			[ ] -> [[],[],[]];
 			 _  -> u:transpose(ToProcess)
 		end,
 	Delegated =
 	if
 		length(Indexes1) /= length(Indexes) ->
 			Unfiltered = u:subtract_range(Indexes, Indexes1),
-			%[Unfiltered, verify_signatures_in_Tx3(Tx, Unfiltered)];
-			%throw(Unfiltered);
-			%FIXME
-			[];
-
+			verify_signatures_in_Tx3(Tx, Unfiltered);
 		length(Indexes1) == length(Indexes) -> []
 	end,
 	%% For P2SH scripts, the Mark used when signinig is RedeemScript.
 	%% ref: http://www.soroushjp.com/2014/12/20/bitcoin-multisig-the-hard-way-understanding-raw-multisignature-bitcoin-transactions/
-	Marks = RedeemScripts,
 	% when serializing for singning witness-related slots are ignored
 	TemplateSig = protocol:template_default_binary_for_slots(Template, 
 		[tx_in, tx_out, scriptPubKey]),
 	V = lists:zipwith3(fun(N,M,R)->verify_multisig(N,M,R,TemplateSig) end,
 		Indexes1, MultiSignatures, RedeemScripts),
 	lists:zip(Indexes1, V) ++ Delegated.
+
+
+
 
 verify_multisig(SlotNo, Signatures, RedeemScript, TemplateSig) ->
 		{p2sh_multisig, {Min_M,Total_N},PubKeys} = script:parse_redeemScript(RedeemScript),
@@ -122,18 +120,11 @@ verify_multisig(SlotNo, Signatures, RedeemScript, TemplateSig) ->
 			length(PubKeys) == Total_N -> ok;
 			length(PubKeys) /= Total_N -> throw(missing_pubkey)
 		end,
-		% OP_CHECKMULTISIG does not check the all the combinations of
-		% signatures and public keys because of its behaviour on the
-		% stack machine. Each signature on the top comsumes public keys
-		% until it finds an ECDSA match. 
-		% We emulate this behaviour.
-		VerifyFunc =
-		fun({sig, S, HashType}, {pubKey, P}) ->
-		ecdsa:verify_signature(
-			S,
-			% We only handle the case when HashType == 1.
-			% redeemScript itself (without precedent push OP) is used for 
-			% filling the pre-signed data when calculating hash.
+		% hash to be signed
+		% We only handle the case when HashType == 1.
+		% redeemScript itself (without precedent push OP) is used for 
+		% filling the pre-signed data when calculating hash.
+		Hash =
 			protocol:dhash(
 				begin
 				LengthBin = protocol:var_int(byte_size(RedeemScript)),
@@ -146,14 +137,24 @@ verify_multisig(SlotNo, Signatures, RedeemScript, TemplateSig) ->
 				HashType = 1, %NOTE: this is an assumption
 				<<B/binary, HashType:32/little>> % HashType should be appended
 				end),
-			P
-			)
-		end,
+		% OP_CHECKMULTISIG does not check the all the combinations of
+		% signatures and public keys because of its behaviour on the
+		% stack machine. Each signature on the top comsumes public keys
+		% until it finds an ECDSA match. 
+		% We emulate this behaviour.
+		VerifyFunc =
+			fun({sig, S, _HashType}, {pubKey, P}) ->
+				ecdsa:verify_signature(S, Hash, P) end,
 		V = emulate_OP_CHECKMULTISIG(VerifyFunc, Signatures, PubKeys),
 		u:count(V,true) >= Min_M. % m-of-n check
 
 
-% a stack machine for OP_CHECKMULTISIG
+%% check all the combinations of Sig/PubKey in multisig (for testing purpose)
+verify_multisig_combinations(VerifyFunc, Signatures, PubKeys) ->
+	[VerifyFunc(S,P) || S<-Signatures, P<-PubKeys].
+
+
+%% a stack machine for OP_CHECKMULTISIG
 emulate_OP_CHECKMULTISIG(VerifyFunc, Signatures, PubKeys) ->
 	StackSig = lists:reverse(Signatures),
 	StackPub = lists:reverse(PubKeys),
@@ -167,6 +168,164 @@ run_CHECKMULTISIG(Acc, VerifyFunc, [Sig|SigT]=StackSig, [Pub|PubT]) ->
 		true ->  run_CHECKMULTISIG([true |Acc], VerifyFunc, SigT,     PubT);
 		false -> run_CHECKMULTISIG([false|Acc], VerifyFunc, StackSig, PubT)
 	end.
+
+%% Verify Signature in Version 0 Witness
+%% 
+%% Hash value to be signed is very different from that in the older scheme.
+%% ref: BIP-143
+verify_signatures_in_Tx3({_TxIdStr, _TxVersion, TxIns, TxOuts, _Witnesses, _LockTime, [{tx,_Template}]}=Tx, Indexes) ->
+	%% SUPPORTED
+	%%                asigned in script.erl
+	%%                scriptSig      scriptPubKey
+	%% native  P2WPKH native_witness native_p2wpkh_keyHash
+	%% native  P2WSH  native_witness native_p2wsh_hash
+	%% in-P2SH P2WPKH p2wpkh_keyHash nested_p2w_hash
+	%% in-P2SH P2WSH  p2wsh_hash     nested_p2w_hash
+
+	NativeP2WPKH_Indexes = [Idx || {Idx, _Value, {scriptPubKey, {native_p2wpkh_keyHash, _KeyHash}}} <- TxOuts],
+	NativeP2WSH_Indexes  = [Idx || {Idx, _Value, {scriptPubKey, {native_p2wsh_hash, _Hash}}} <- TxIns],
+	NestedP2WPKH_Indexes = [Idx || {Idx, _PreviousOutput, {scriptSig, {p2wpkh_keyHash, _KeyHash}},_Sequence} <- TxIns],
+	NestedP2WSH_Indexes  = [Idx || {Idx, _PreviousOutput, {scriptSig, {p2wsh_hash, _Hash}},_Sequence} <- TxIns],
+
+	%io:format("Version 0 Witness Signature Verifications:~nnative P2WPKH ~p~nnative P2WSH  ~p~nnested P2WPKH ~p~nnested P2WSH  ~p~n",[NativeP2WPKH_Indexes,NativeP2WSH_Indexes,NestedP2WPKH_Indexes,NestedP2WSH_Indexes]),
+
+	ToProcessIndexes = NativeP2WPKH_Indexes ++ NativeP2WSH_Indexes ++ NestedP2WPKH_Indexes ++ NestedP2WSH_Indexes,
+	UnfilteredIndexes = u:subtract_range(Indexes, ToProcessIndexes),
+	Delegated =
+		case UnfilteredIndexes of
+			[ ] -> [];
+			 L  -> throw({unknown_type_of_signatures_in_Tx, L})
+		end,
+	V4 = verify_nested_P2WSH_signatures_in_Tx(Tx, NestedP2WSH_Indexes),
+	V4 ++ Delegated.
+
+
+%% Witness = <> <Sig1> ... <SigX> <RedeemScript>
+%% scriptCode = var_int(Len) <RedeemScript (witnessScript)>
+%%
+verify_nested_P2WSH_signatures_in_Tx({_TxIdStr, _TxVersion, _TxIns, _TxOuts, Witnesses, _LockTime, [{tx,_Template}]}=Tx, Indexes) ->
+	Env = tester, % FIXME
+
+	Ws = [lists:nth(I,Witnesses) || I <- Indexes],
+	% Witness = [<<>>,<<Sig1>>,<<Sig2>>,...,<<SigX>>,<<WitnessScript>>]
+	{Multisignatures, WitnessScripts} =
+		lists:unzip([parse_witness_P2WSH(W) || W <- Ws]),
+	ScriptCodes = [
+		begin
+			LengthBin = protocol:var_int(byte_size(W)),
+			<<LengthBin/binary,W/binary>>
+		end || W <- WitnessScripts
+	],
+	
+	SigTypes = [1 || _ <- Multisignatures], % FIXME
+	Hashes = hash_of_Tx_in_v0_witness_program(Tx,
+		{Indexes, ScriptCodes, SigTypes}, Env),
+	{M_of_Ns, MultiPubKeys} = lists:unzip(
+		[
+			{{Min_M,Total_N},PubKeys} ||
+				{p2sh_multisig, {Min_M,Total_N},PubKeys} <- 
+				[
+					script:parse_redeemScript(W) || W <- WitnessScripts
+				]
+		]),
+	% check the number of PubKeys matches <n>
+	case lists:all(fun({{_M,N},MPK})-> N == length(MPK) end,
+		lists:zip(M_of_Ns,MultiPubKeys)) of
+		true  -> ok;
+		false -> throw(missing_pubkeys)
+	end,
+
+	V = [
+			begin
+			VerifyFunc =
+				fun({sig, S, _HashType}, {pubKey, P}) ->
+					ecdsa:verify_signature(S, H, P) end,
+			emulate_OP_CHECKMULTISIG(VerifyFunc, Signatures, PubKeys)
+			%verify_multisig_combinations(VerifyFunc,Signatures,PubKeys))
+			end
+			|| {Signatures, H, PubKeys} <- lists:zip3(
+				Multisignatures,
+				Hashes,
+				MultiPubKeys)
+		],
+	
+	V1 = [ u:count(R,true) >= M || {R,{M,_N}} <- lists:zip(V, M_of_Ns) ],
+	lists:zip(Indexes, V1).
+
+
+parse_witness_P2WSH(Witness) ->
+	<<>> = hd(Witness), % OP_0 (for 'one-off bug')
+	[WitnessScript|Most] = lists:reverse(Witness),
+	SignatureBins = tl(lists:reverse(Most)), % in-between
+	Signatures = [
+		begin
+		DERLen = byte_size(S) -1,
+		<<DER:DERLen/binary,SigType>> = S,
+		{sig, ecdsa:parse_signature_DER(DER), SigType}
+		end
+		|| S <- SignatureBins],
+	{Signatures, WitnessScript}.	
+
+
+%% Hashing for Version 0 Witness Program
+%% 
+%% dhash of
+%%  1. TxVersion (4-byte little)
+%%  2. hashPrevOuts (32-byte)
+%%  3. hashSequence (32-byte)
+%%  4. Outpoint (32-byte hash | 4-byte little)
+%%  5. scriptCode of the input
+%%  6. value of the output spent by this input (8-byte little)
+%%  7. Sequence of the input
+%%  8. hashOutputs (32-byte hash)
+%%  9. LockTime (4-byte little)
+%% 10. SigType (4-byte little)
+%% 
+%% ref: BIP-143
+hash_of_Tx_in_v0_witness_program({_TxIdStr, TxVersion, TxIns, TxOuts, _Witnesses, LockTime, [{tx,Template}]}=Tx, {Indexes, ScriptCodes, SigTypes}, Env) ->
+	HashPrevouts = protocol:dhash(
+		list_to_binary([protocol:outpoint(Prevout) || {_,Prevout,_,_} <- TxIns])),
+	HashSequence = protocol:dhash(
+		list_to_binary([<<Sequence:32/little>> || {_,_,_,Sequence} <- TxIns])),
+	% serializations of (<OutputValue><scriptPubKey>)*n
+	T1 = protocol:template_default_binary_for_slots(Template,[tx_out]),
+	ScriptPubKeys = [B || {scriptPubKey,B} <- T1],
+	HashOutput   = protocol:dhash(
+		list_to_binary([
+			begin
+			OutputValue = protocol:tx_output_value(Tx, I),
+			ScriptPK    = lists:nth(I, ScriptPubKeys),
+			<<OutputValue:64/little, ScriptPK/binary>>
+			end
+			|| I <- lists:seq(1,length(TxOuts))
+		])),
+	
+	Hashes =
+	[protocol:dhash(
+		begin
+		% for this input
+		{I,Prevout,_,Sequence} = lists:nth(I,TxIns),
+		SpentAmount = protocol:tx_input_value(Tx, I, Env),
+
+		list_to_binary([
+			<<TxVersion:32/little>>,    % 1.
+			HashPrevouts,               % 2.
+			HashSequence,               % 3.
+			protocol:outpoint(Prevout), % 4.
+			SC,                         % 5.
+			<<SpentAmount:64/little>>,  % 6.
+			<<Sequence:32/little>>,     % 7.
+			HashOutput,                 % 8.
+			<<LockTime:32/little>>,     % 9.
+			<<ST:32/little>>            % 10.
+		])
+		end
+	) || {I,SC,ST} <- lists:zip3(Indexes, ScriptCodes, SigTypes)
+	],
+
+	Hashes.
+
+
 
 
 
@@ -236,14 +395,6 @@ verify_signatures_in_Tx_test_() ->
 	[
 		{timeout, 10, fun verify_signatures_in_Tx_sub/0}
 	].
-
-%% P2SH & multisig
-verify_signatures_in_Tx_sub2() ->
-	TxFilePath = filename:join(os:getenv("HOME"), "moles/test-txs/e0d9e3f42b5bc6ef100514428c0a6306d073a0070035659c6e1b33dcd5827176.rawhex"),
-	{T,_} = protocol:read_tx(u:read_rawhex_file(TxFilePath)),
-
-	ok.
-
 
 
 -endif.
