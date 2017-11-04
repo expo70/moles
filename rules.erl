@@ -2,10 +2,11 @@
 %%
 -module(rules).
 -include_lib("eunit/include/eunit.hrl").
+-include("./include/constants.hrl").
 
 -compile(export_all).
 
--define(HASH256_ZERO, "0000000000000000000000000000000000000000000000000000000000000000").
+
 
 %% Critical limitations
 %% bitcoin/src/consensus/consensus.h
@@ -353,7 +354,7 @@ verify_merkle_root({{_BlockHash, _BlockVersion, _PrevBlockHash, MerkleRootHash, 
 %% which completely resolves Trasaction Malleability problem
 witness_root_hash({{_BlockHash, _BlockVersion, _PrevBlockHash, _MerkleRootHash, _Time, _Bits, _Nonce, _TxnCount}, Txns}) ->
 	WTxids  = [protocol:hash(WTxidStr) || {{_,WTxidStr},_,_,_,_,_,_} <- Txns],
-	WTxids1 = [protocol:hash(?HASH256_ZERO)|tl(WTxids)],
+	WTxids1 = [protocol:hash(?HASH256_ZERO_STR)|tl(WTxids)],
 	protocol:merkle_hash(WTxids1).
 
 verify_witness_root({CommitmentHash, WitnessReservedValue}, Block) ->
@@ -386,6 +387,15 @@ total_output_value(TxOuts) ->
 %	C1 = {tx_in_counts,  length(TxIns)>0},
 %	C2 = {tx_out_counts, length(TxOuts)>0},
 %	C3 = {
+
+
+port(mainnet) -> ?DEFAULT_MAINNET_INCOMING_PORT;
+port(testnet) -> ?DEFAULT_TESTNET_INCOMING_PORT;
+port(regtest) -> ?DEFAULT_REGTEST_INCOMING_PORT.
+
+
+genesis_block_hash(regtest) -> ?REGTEST_GENESIS_BLOCK_HASH;
+genesis_block_hash(testnet) -> ?TESTNET_GENESIS_BLOCK_HASH.
 
 
 
