@@ -122,3 +122,4 @@ remove_whitespace(Str) ->
 	re:replace(Str, "\\s+", "", [global,{return,list}]).
 
 
+most(L) -> lists:reverse(tl(lists:reverse(L))).

@@ -1,7 +1,10 @@
 -module(tester).
+-include_lib("eunit/include/eunit.hrl").
 
 %-export([get_binary/2]).
 -compile(export_all).
+
+-define(HASH256_ZERO, "0000000000000000000000000000000000000000000000000000000000000000").
 
 
 default_config() -> #{
@@ -46,10 +49,10 @@ rawhex_URL({block, Txid}, _Config) ->
 
 bin_data_path({tx, Txid},Config) ->
 	S = rhash_string(Txid),
-	filename:join([bin_base_dir(Config),"tx",S++".bin"]);
-bin_data_path({block, Txid},Config) ->
-	S = rhash_string(Txid),
-	filename:join([bin_base_dir(Config),"block",S++".bin"]).
+	filename:join([bin_base_dir(Config),"tx",S++maps:get(bin_ext,Config)]);
+bin_data_path({block, BlockHash},Config) ->
+	S = rhash_string(BlockHash),
+	filename:join([bin_base_dir(Config),"block",S++maps:get(bin_ext,Config)]).
 
 
 %% ItemType :: atom()
@@ -84,3 +87,115 @@ get_binary({_ItemType, Hash}=Req,Config) when is_binary(Hash) ->
 					Bin
 			end
 	end.
+
+
+
+read_tx_n_sizes(Bin,N) -> read_tx_n_sizes({[],byte_size(Bin)},Bin,N).
+
+read_tx_n_sizes({Acc,_},Rest,0) -> {lists:reverse(Acc), Rest};
+read_tx_n_sizes({Acc,Size},Bin,N) ->
+	{{
+		{TxidStr,_WTxidStr},
+		_Version,
+		_TxIns,
+		_TxOuts,
+		_Witness,
+		_LockTime,
+		_Template
+	},Rest} = protocol:read_tx(Bin),
+	NewSize = byte_size(Rest),
+	read_tx_n_sizes({[{protocol:hash(TxidStr),(Size-NewSize)}|Acc],NewSize},Rest,N-1).
+
+
+% record Tx starting positions for later use
+create_index_from_block(BlockHash, Config) ->
+	BinDataPath = bin_data_path({block, BlockHash}, Config),
+	BlockByteSize = filelib:file_size(BinDataPath),
+	{ok,Bin} = file:read_file(BinDataPath),
+
+	{{HashStr,_Version,_PrevBlockHash,_MerkleRootHash,_Timestamp,_Bits,_Nonce,TxnCount}=BlockHeader, Rest} = protocol:read_block_header(Bin),
+
+	BlockHash = protocol:hash(HashStr),
+	TxStartPos = BlockByteSize - byte_size(Rest),
+	{TxSizes,Rest1} = read_tx_n_sizes(Rest,TxnCount),
+	<<>> = Rest1,
+	TxIndex = create_tx_index({BlockHash,TxStartPos},TxSizes),
+	lists:zip(
+		lists:seq(1,length(TxIndex)),
+		[process_Tx(Ent,fun summarize_Tx1/2,Config) || Ent <- TxIndex]
+		).
+%	ok.
+
+
+create_tx_index({BlockHash,TxStartPos},TxSizes) ->
+	{TxHashes,Sizes} = lists:unzip(TxSizes),
+	TxOffsets = lists:reverse(lists:foldl(fun(E,Acc)->[hd(Acc)+E|Acc] end,[TxStartPos],Sizes)),
+	lists:zip(TxHashes,[{BlockHash,Ofs,Siz} || {Ofs,Siz} <- lists:zip(u:most(TxOffsets),Sizes)]).
+
+
+process_Tx({_TxHash, {BlockHash,Offset,Size}}=_TxIndexEntry, ProcessFunc, Config) ->
+	BinDataPath = bin_data_path({block, BlockHash}, Config),
+	{ok,F} = file:open(BinDataPath,[read,binary]),
+	try
+	begin
+	{ok,_} = file:position(F, Offset),
+	{ok,B} = file:read(F, Size),
+	file:close(F),
+	protocol:read_tx(B)
+	end of
+		{Tx,<<>>} ->
+			ProcessFunc(Tx, Config)
+	catch
+		_Class:Reason ->
+			file:close(F),
+			throw({failed_to_process_tx, Reason})
+	end.
+
+
+summarize_Tx({
+		{_TxidStr,_WTxidStr},
+		_Version,
+		TxIns,
+		TxOuts,
+		Witness,
+		_LockTime,
+		_Template}=_Tx, _Config) ->
+	
+	{
+		[{in,  Idx,SS}  || {Idx,_,{scriptSig,    {SS,_}},_} <- TxIns],
+		[{witness, W}   || W <- Witness],
+		[{out, Idx,SPK} || {Idx,_,{scriptPubKey, {SPK,_}}} <- TxOuts]
+	}.
+
+summarize_TxOut({Idx,_,{scriptPubKey, {SPK,_}}}=_TxOut, _Config) ->
+	{out, Idx,SPK}.
+
+summarize_Tx1({
+		{TxidStr,_WTxidStr},
+		_Version,
+		TxIns,
+		TxOuts,
+		Witness,
+		_LockTime,
+		_Template}=_Tx, Config) ->
+	io:format("Tx ... ~s~n",[TxidStr]),
+	
+	{
+		[{in,  Idx,SS}  || {Idx,_,{scriptSig,    {SS,_}},_} <- TxIns],
+		[{witness, W}   || W <- Witness],
+		[{out, Idx,SPK} || {Idx,_,{scriptPubKey, {SPK,_}}} <- TxOuts],
+		[
+			begin
+			case PrevTxHashStr of
+				?HASH256_ZERO -> {prevOut, Idx, non_coinbase};
+				_ ->
+					io:format("Tx ->. ~s~n",[PrevTxHashStr]),
+					Bin = get_binary({tx, protocol:hash(PrevTxHashStr)},Config),
+					{{_,_,_,TO,_,_,_},<<>>} = protocol:read_tx(Bin),
+					TxOut = lists:nth(Index0+1,TO),
+					{prevOut, Idx, summarize_TxOut(TxOut,Config)}
+			end
+			end || {Idx,{PrevTxHashStr,Index0},_,_} <- TxIns
+		]
+	}.
+

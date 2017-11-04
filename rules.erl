@@ -173,7 +173,7 @@ run_CHECKMULTISIG(Acc, VerifyFunc, [Sig|SigT]=StackSig, [Pub|PubT]) ->
 %% 
 %% Hash value to be signed is very different from that in the older scheme.
 %% ref: BIP-143
-verify_signatures_in_Tx3({_TxIdStr, _TxVersion, TxIns, TxOuts, _Witnesses, _LockTime, [{tx,_Template}]}=Tx, Indexes) ->
+verify_signatures_in_Tx3({_TxIdStr, _TxVersion, TxIns, _TxOuts, _Witnesses, _LockTime, [{tx,_Template}]}=Tx, Indexes) ->
 	%% SUPPORTED
 	%%                asigned in script.erl
 	%%                scriptSig      scriptPubKey
@@ -182,14 +182,12 @@ verify_signatures_in_Tx3({_TxIdStr, _TxVersion, TxIns, TxOuts, _Witnesses, _Lock
 	%% in-P2SH P2WPKH p2wpkh_keyHash nested_p2w_hash
 	%% in-P2SH P2WSH  p2wsh_hash     nested_p2w_hash
 
-	NativeP2WPKH_Indexes = [Idx || {Idx, _Value, {scriptPubKey, {native_p2wpkh_keyHash, _KeyHash}}} <- TxOuts],
-	NativeP2WSH_Indexes  = [Idx || {Idx, _Value, {scriptPubKey, {native_p2wsh_hash, _Hash}}} <- TxIns],
-	NestedP2WPKH_Indexes = [Idx || {Idx, _PreviousOutput, {scriptSig, {p2wpkh_keyHash, _KeyHash}},_Sequence} <- TxIns],
-	NestedP2WSH_Indexes  = [Idx || {Idx, _PreviousOutput, {scriptSig, {p2wsh_hash, _Hash}},_Sequence} <- TxIns],
+	NestedP2WPKH_Indexes = [Idx || {Idx, _PrevOut, {scriptSig, {p2wpkh_keyHash, _KeyHash}},_Sequence} <- TxIns],
+	NestedP2WSH_Indexes  = [Idx || {Idx, _PrevOut, {scriptSig, {p2wsh_hash, _Hash}},_Sequence} <- TxIns],
+	%
+	Native_Witness_Indexes = [Idx || {Idx, _PrevOut, {scriptSig, {native_witness, <<>>}},_Sequence} <- TxIns],
 
-	%io:format("Version 0 Witness Signature Verifications:~nnative P2WPKH ~p~nnative P2WSH  ~p~nnested P2WPKH ~p~nnested P2WSH  ~p~n",[NativeP2WPKH_Indexes,NativeP2WSH_Indexes,NestedP2WPKH_Indexes,NestedP2WSH_Indexes]),
-
-	ToProcessIndexes = NativeP2WPKH_Indexes ++ NativeP2WSH_Indexes ++ NestedP2WPKH_Indexes ++ NestedP2WSH_Indexes,
+	ToProcessIndexes = NestedP2WPKH_Indexes ++ NestedP2WSH_Indexes ++ Native_Witness_Indexes,
 	UnfilteredIndexes = u:subtract_range(Indexes, ToProcessIndexes),
 	Delegated =
 		case UnfilteredIndexes of
@@ -207,7 +205,6 @@ verify_nested_P2WSH_signatures_in_Tx({_TxIdStr, _TxVersion, _TxIns, _TxOuts, Wit
 	Env = tester, % FIXME
 
 	Ws = [lists:nth(I,Witnesses) || I <- Indexes],
-	% Witness = [<<>>,<<Sig1>>,<<Sig2>>,...,<<SigX>>,<<WitnessScript>>]
 	{Multisignatures, WitnessScripts} =
 		lists:unzip([parse_witness_P2WSH(W) || W <- Ws]),
 	ScriptCodes = [
@@ -253,6 +250,8 @@ verify_nested_P2WSH_signatures_in_Tx({_TxIdStr, _TxVersion, _TxIns, _TxOuts, Wit
 	lists:zip(Indexes, V1).
 
 
+
+% Witness = [<<>>,<<Sig1>>,<<Sig2>>,...,<<SigX>>,<<WitnessScript>>]
 parse_witness_P2WSH(Witness) ->
 	<<>> = hd(Witness), % OP_0 (for 'one-off bug')
 	[WitnessScript|Most] = lists:reverse(Witness),
@@ -265,6 +264,17 @@ parse_witness_P2WSH(Witness) ->
 		end
 		|| S <- SignatureBins],
 	{Signatures, WitnessScript}.	
+
+% Witness = [<<Sig>><<PubKey>>]
+parse_witness_P2WPKH(Witness) ->
+	[S,P] = Witness,
+	DERLen = byte_size(S)-1,
+	<<DER:DERLen/binary,SigType>> = S,
+	{
+		{sig,    ecdsa:parse_signature_DER(DER), SigType},
+		{pubKey, ecdsa:parse_public_key(P)}
+	}.
+
 
 
 %% Hashing for Version 0 Witness Program

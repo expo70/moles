@@ -254,15 +254,24 @@ read_tx(TAcc, Version, HasWitnessQ, Rest) ->
 	{TAcc2, TxIns, Rest2} = read_tx_in_n(TAcc1, Rest1, TxInCount),
 	{TAcc3, TxOutCount, Rest3} = read_var_int(TAcc2, Rest2),
 	{TAcc4, TxOuts, Rest4} = read_tx_out_n(TAcc3, Rest3, TxOutCount),
-	
+
 	% We parse signatures all at once here because
 	% the interpretations depend on whether the Tx has Witness. 
+	CoinbaseTxIn = hd([{Index,Outpoint,
+		{scriptSig, {coinbase, SigScript}},Sequence} ||
+		{Index,Outpoint,SigScript,Sequence}<-[hd(TxIns)]]),
 	TxIns1  = [{Index,Outpoint,
 		script:parse_scriptSig(SigScript,HasWitnessQ),Sequence} ||
-		{Index,Outpoint,SigScript,Sequence}<-TxIns],
+		{Index,Outpoint,SigScript,Sequence}<-tl(TxIns)],
+	TxIns2 = [CoinbaseTxIn|TxIns1],
+
+	CoinbaseTxOut = hd([{Index,Value,
+		{scriptPubKey, {coinbase, PKScript}}} ||
+		{Index,Value, PKScript}<-[hd(TxOuts)]]),
 	TxOuts1 = [{Index,Value,   
 		script:parse_scriptPubKey(PKScript,HasWitnessQ)} ||
-		{Index,Value,   PKScript}<-TxOuts],
+		{Index,Value,   PKScript}<-tl(TxOuts)],
+	TxOuts2 = [CoinbaseTxOut|TxOuts1],
 	
 	{TAcc5, Witnesses, Rest5} =
 		case HasWitnessQ of
@@ -292,7 +301,7 @@ read_tx(TAcc, Version, HasWitnessQ, Rest) ->
 	 		template_fill_nth(T3,{witness_marker_and_flag, <<>>},any),
 			{witness, <<>>},any
 		))),
-	{{{parse_hash(Txid),parse_hash(WTxid)}, Version, TxIns1, TxOuts1, Witnesses, LockTime, T}, Rest6}.
+	{{{parse_hash(Txid),parse_hash(WTxid)}, Version, TxIns2, TxOuts2, Witnesses, LockTime, T}, Rest6}.
 
 read_tx_n(Bin, N) -> read_tx_n([], N, Bin).
 

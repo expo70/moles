@@ -105,23 +105,19 @@ parse_scriptSig(Script, false=_HasWitnessQ) ->
 	{Pushes,Rest1} = read_PUSHes(Script),
 	case length(Pushes) of
 		 2 ->
-		 	<<>> = Rest1,
-		 	[{push, PubKey}, {push, Sig}] = Pushes,
-			DERLen = byte_size(Sig)-1,
-			<<SigDER:DERLen/binary, SigType>> = Sig,
-			%try
-		 	{scriptSig,
-				{
-					{sig,    ecdsa:parse_signature_DER(SigDER), SigType},
-					{pubKey, ecdsa:parse_public_key(PubKey)}
-				}
-			}
-			%of
-			%	V -> V
-			%catch
-			%error:_ -> {scriptSig, {unknown, Script}}
-			%end
-			;
+		 	case Rest1 of
+		 		<<>> ->
+		 		[{push, PubKey}, {push, Sig}] = Pushes,
+				DERLen = byte_size(Sig)-1,
+				<<SigDER:DERLen/binary, SigType>> = Sig,
+		 		{scriptSig,
+					{
+						{sig,    ecdsa:parse_signature_DER(SigDER), SigType},
+						{pubKey, ecdsa:parse_public_key(PubKey)}
+					}
+				};
+				_ -> {scriptSig, {unknown, Script}}
+			end;
 		 _ -> {scriptSig, {unknown, Script}}   
 	end;
 %% Version 0 Witness Program
