@@ -42,12 +42,17 @@ verify_signatures_in_Tx({_TxIdStr, _TxVersion, TxIns, _TxOuts, _Witnesses, _Lock
 			[ ] -> [[],[],[],[]];
 			 _  -> u:transpose(ToProcess)
 		end,
+	
+	CoinbaseIndexes = [Idx || {Idx, _, {scriptSig, {coinbase, _}},_} <- TxIns],
+	CoinbaseCount = length(CoinbaseIndexes),
+	CoinbaseResults = [{Idx,true} || Idx <- CoinbaseIndexes],
+
 	Delegated =
 	if
-		length(Signatures) /= N_TxIns ->
-			Unfiltered = u:subtract_range(u:range(N_TxIns), Indexes),
+		length(Signatures)+CoinbaseCount /= N_TxIns ->
+			Unfiltered = u:subtract_range(u:range(N_TxIns), Indexes++CoinbaseIndexes),
 			verify_signatures_in_Tx2(Tx, Unfiltered);
-		length(Signatures) == N_TxIns -> []
+		length(Signatures)+CoinbaseCount == N_TxIns -> []
 	end,
 	
 	%% This is what fills in scriptSig slots when signing.
@@ -68,19 +73,19 @@ verify_signatures_in_Tx({_TxIdStr, _TxVersion, TxIns, _TxOuts, _Witnesses, _Lock
 		[protocol:dhash(
 			begin
 			TS1 = protocol:template_fill_nth(TemplateSig,
-					{scriptSig, lists:nth(N, Marks)},N),
+					{scriptSig, lists:nth(N, Marks)},lists:nth(N,Indexes)),
 			TS2 = protocol:template_fill_nth(TS1,
 					{scriptSig, protocol:var_int(0)},any),
 			B = protocol:template_to_binary(TS2),
 			HT = lists:nth(N, HashTypes),
 			<<B/binary, HT:32/little>> % HashType should be appended
 			end
-					) || N <- Indexes],
+					) || N <- lists:seq(1,length(Indexes))],
 	
 	V = lists:zipwith3(fun(S,H,P) -> ecdsa:verify_signature(S,H,P) end,
 		Signatures, SignedHashes, PublicKeys),
 	lists:sort(fun({I1,_},{I2,_}) -> I1=<I2 end, 
-		lists:zip(Indexes,V) ++ Delegated).
+		lists:zip(Indexes,V) ++ Delegated ++ CoinbaseResults).
 
 %% Verify P2SH multisig
 %% 

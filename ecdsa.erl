@@ -61,6 +61,7 @@ signature(Hash, PrivateKey, K) ->
 
 % PublicKey - Point Q
 % Signature - (r,s)
+-ifdef(USE_PURE_ERLANG_ECDSA).
 verify_signature({R,S}, Hash, Q) ->
 	OnEC = is_on_elliptic_curve(Q),
 	if
@@ -79,6 +80,12 @@ verify_signature({R,S}, Hash, Q) ->
 			{X,_} = plus_point(P1,P2),
 			mod(X,?ORDER) == R
 	end.
+-else.
+verify_signature({R,S}, Hash, Q) ->
+	crypto:verify(ecdsa,sha256,{digest,Hash},
+		signature_DER({R,S}),
+		[public_key(Q,uncompressed),crypto:ec_curve(secp256k1)]).
+-endif.
 
 %% point calculations on an elliptic carve
 double_point({X,Y}) when Y>0 ->
