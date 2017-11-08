@@ -81,13 +81,14 @@ handle_call({request_peer, _Priority}, _From, S) ->
 	Tid = S#status.tid_peers,
 	TidPeersUsed = S#status.tid_peers_used,
 
-	IPs = ets:match(Tid, {'$1','_','_',{new,'_'},'_','_','_'}),
-	IPs1 = [IP || IP <- IPs, not ets:member(TidPeersUsed, IP)],
+	%FIXME, now only supports Priority = new
+	Matches = ets:match(Tid, {'$1','_','_',{new,'_'},'_','_','_'}),
+	IPs = [IP || [IP] <- Matches, not ets:member(TidPeersUsed, IP)],
 
-	case IPs1 of
+	case IPs of
 		[ ] -> {reply, not_available, S};
 		 _  ->
-		 	Reply = hd(IPs1),
+		 	Reply = hd(IPs),
 			ets:insert(TidPeersUsed, Reply),
 			{reply, Reply, S}
 	end.
