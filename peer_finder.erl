@@ -89,7 +89,7 @@ handle_call({request_peer, _Priority}, _From, S) ->
 		[ ] -> {reply, not_available, S};
 		 _  ->
 		 	Reply = hd(IPs),
-			ets:insert(TidPeersUsed, Reply),
+			ets:insert(TidPeersUsed, {Reply}),
 			{reply, Reply, S}
 	end.
 
@@ -110,12 +110,13 @@ handle_cast({update_peer,{IP_Address, UserAgent, ServicesFlag, LastUseTime,
 	Tid = S#status.tid_peers,
 	TidPeersUsed = S#status.tid_peers_used,
 
-	ets:insert(TidPeersUsed, IP_Address),
+	ets:insert(TidPeersUsed, {IP_Address}),
 
 	case ets:lookup(Tid, IP_Address) of
 		[] -> ets:insert_new(PeerInfo);
 		[{IP_Address, _, _, _,
 			OldTotalUseDuration, OldTotalInBytes, OldTotalOutBytes}] ->
+			%FIXME, avoid summing totals again
 			ets:insert(Tid, {IP_Address, UserAgent, ServicesFlag, LastUseTime,
 				OldTotalUseDuration + TotalUseDuration,
 				OldTotalInBytes + TotalInBytes,
