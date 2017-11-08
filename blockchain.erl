@@ -27,6 +27,7 @@
 
 -define(HEADER_SIZE, 81). % 80 + byte_size(var_int(0))
 -define(TREE_UPDATE_INTERVAL, 10*1000).
+-define(HEADERS_FILE_NAME, "headers.dat").
 
 
 -record(state,
@@ -62,9 +63,20 @@ get_floating_root_hashes() ->
 %% gen_server callbacks
 %% ----------------------------------------------------------------------------
 init([NetType]) ->
+	
+	HeadersFileDir =
+	case NetType of
+		mainnet  -> "./mainnet/headers";
+		testnet  -> "./testnet/headers";
+		regtest  -> "./regtest/headers"
+	end,
+	
+	ok = filelib:ensure_dir(HeadersFileDir++'/'),
+	HeadersFilePath = filename:join(HeadersFileDir, ?HEADERS_FILE_NAME),
+
 	InitialState = #state{
 			net_type = NetType,
-			headers_file_path = "./headers.dat",
+			headers_file_path = HeadersFilePath,
 			new_entries = []
 		},
 	
@@ -106,6 +118,7 @@ handle_call(get_floating_root_hashes, _From, S) ->
 handle_cast({save_headers, HeadersPayload, Origin}, S) ->
 	Tid = S#state.tid_tree,
 	HeadersFilePath = S#state.headers_file_path,
+	%NOTE: the file is created if it does not exist.
 	{ok,F} = file:open(HeadersFilePath,[write,binary,append]),
 
 	SaveFunc = fun(HeaderBin) ->
@@ -347,13 +360,18 @@ remove_entry_from_the_tree({Hash,_,PrevHash,NextHashes}=Entry, S) ->
 load_headers_from_file(S) ->
 	HeadersFilePath = S#state.headers_file_path,
 	NewEntries = S#state.new_entries,
-	{ok,F} = file:read_file(HeadersFilePath),
 
-	NewEntries1 = read_header_chunk_loop(lists:reverse(NewEntries),F),
-	file:close(F),
+	case u:file_existsQ(HeadersFilePath) of
+		true ->
+			{ok,F} = file:read_file(HeadersFilePath),
+			
+			NewEntries1 = read_header_chunk_loop(lists:reverse(NewEntries),F),
+			file:close(F),
 
-	io:format("~wnew entries were loaded.~n",[length(NewEntries1)]),
-	S#state{new_entries=NewEntries1}.
+			io:format("~wnew entries were loaded.~n",[length(NewEntries1)]),
+			S#state{new_entries=NewEntries1};
+		false -> S
+	end.
 
 read_header_chunk_loop(Acc, F) ->
 	{ok,Position} = file:possition(F, cur),
