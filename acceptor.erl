@@ -74,12 +74,11 @@ handle_call({request_control, Socket, CallingPid}, _From, S) ->
 handle_cast({accept, Socket}, S) ->
 	NetType = S#state.net_type,
 	Port = S#state.port,
-	Socket = S#state.socket,
-	io:format("Port ~paccepted incoming connection ~p", [Port, Socket]),
+	io:format("Port ~w accepted incoming connection ~p~n", [Port, Socket]),
 	
 	comm_sup:add_comm(NetType, {incoming, Socket}),
 	
-	{noreply, S}.
+	{noreply, S#state{socket=Socket}}.
 
 
 handle_info(_Info, S) ->

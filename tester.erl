@@ -120,11 +120,13 @@ create_index_from_block(BlockHash, Config) ->
 	{TxSizes,Rest1} = read_tx_n_sizes(Rest,TxnCount),
 	<<>> = Rest1,
 	TxIndex = create_tx_index({BlockHash,TxStartPos},TxSizes),
-	lists:zip(
+	Summary = lists:zip(
 		lists:seq(1,length(TxIndex)),
 		[process_Tx(Ent,fun summarize_Tx1/2,Config) || Ent <- TxIndex]
-		).
-%	ok.
+		),
+	{ok,F}=file:open("./tester.txt",[write]),
+	ok=io:format(F,"~w~n",[Summary]),
+	ok.
 
 
 create_tx_index({BlockHash,TxStartPos},TxSizes) ->
@@ -137,14 +139,11 @@ process_Tx({_TxHash, {BlockHash,Offset,Size}}=_TxIndexEntry, ProcessFunc, Config
 	BinDataPath = bin_data_path({block, BlockHash}, Config),
 	{ok,F} = file:open(BinDataPath,[read,binary]),
 	try
-	begin
-	{ok,_} = file:position(F, Offset),
-	{ok,B} = file:read(F, Size),
-	file:close(F),
-	protocol:read_tx(B)
-	end of
-		{Tx,<<>>} ->
-			ProcessFunc(Tx, Config)
+		{ok,_} = file:position(F, Offset),
+		{ok,B} = file:read(F, Size),
+		file:close(F),
+		{Tx,<<>>} = protocol:read_tx(B),
+		ProcessFunc(Tx, Config)
 	catch
 		_Class:Reason ->
 			file:close(F),

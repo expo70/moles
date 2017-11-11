@@ -12,7 +12,7 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
 
--record(status,{
+-record(state,{
 	net_type,
 	dns_servers,
 	tid_peers,
@@ -22,7 +22,7 @@
 
 
 % peers table entry
-% {IP_Address, UserAgent, ServicesFlag,
+% {IP_Address, UserAgent, ServicesFlag, BestHeight,
 %	LastUseTime, TotalUseDuration, TotalInBytes, TotalOutBytes}
 
 
@@ -62,7 +62,7 @@ init([NetType]) ->
 			Tid = ets:new(peers, [])
 	end,
 	
-	InitialStatus = #status{
+	InitialStatus = #state{
 		net_type = NetType,
 		dns_servers = dns_servers(NetType),
 		tid_peers = Tid,
@@ -77,9 +77,9 @@ init([NetType]) ->
 %% 
 %% Priority = new | 
 %% 
-handle_call({request_peer, _Priority}, _From, S) ->
-	Tid = S#status.tid_peers,
-	TidPeersUsed = S#status.tid_peers_used,
+handle_call({request_peer, new=_Priority}, _From, S) ->
+	Tid = S#state.tid_peers,
+	TidPeersUsed = S#state.tid_peers_used,
 
 	%FIXME, now only supports Priority = new
 	Matches = ets:match(Tid, {'$1','_','_',{new,'_'},'_','_','_'}),
@@ -95,29 +95,30 @@ handle_call({request_peer, _Priority}, _From, S) ->
 
 
 handle_cast({dns_seeds, S}, _S) ->
-	Tid = S#status.tid_peers,
-	DNS_Servers = S#status.dns_servers,
+	Tid = S#state.tid_peers,
+	DNS_Servers = S#state.dns_servers,
 	
 	IPs = ns_lookup(hd(DNS_Servers), in, a),
 	Time = erlang:system_time(second),
 
 	lists:foreach(fun(P) -> add_new_peer(P, {new, Time}, Tid) end, IPs),
 
-	{noreply, S#status{dns_servers=u:list_rotate_left1(DNS_Servers)}};
-handle_cast({update_peer,{IP_Address, UserAgent, ServicesFlag, LastUseTime,
-	TotalUseDuration, TotalInBytes, TotalOutBytes}=PeerInfo}, S) ->
+	{noreply, S#state{dns_servers=u:list_rotate_left1(DNS_Servers)}};
+handle_cast({update_peer,{IP_Address, UserAgent, ServicesFlag, BestHeight,
+	LastUseTime, TotalUseDuration, TotalInBytes, TotalOutBytes}=PeerInfo}, S) ->
 	
-	Tid = S#status.tid_peers,
-	TidPeersUsed = S#status.tid_peers_used,
+	Tid = S#state.tid_peers,
+	TidPeersUsed = S#state.tid_peers_used,
 
 	ets:insert(TidPeersUsed, {IP_Address}),
 
 	case ets:lookup(Tid, IP_Address) of
 		[] -> ets:insert_new(PeerInfo);
-		[{IP_Address, _, _, _,
+		[{IP_Address, _, _, _, _,
 			OldTotalUseDuration, OldTotalInBytes, OldTotalOutBytes}] ->
 			%FIXME, avoid summing totals again
-			ets:insert(Tid, {IP_Address, UserAgent, ServicesFlag, LastUseTime,
+			ets:insert(Tid, {IP_Address, UserAgent, ServicesFlag, BestHeight,
+				LastUseTime,
 				OldTotalUseDuration + TotalUseDuration,
 				OldTotalInBytes + TotalInBytes,
 				OldTotalOutBytes + TotalOutBytes})
@@ -131,8 +132,8 @@ handle_info(_Info, S) ->
 
 
 terminate(_Reason, S) ->
-	Tid = S#status.tid_peers,
-	PeersFilePath = S#status.peers_file_path,
+	Tid = S#state.tid_peers,
+	PeersFilePath = S#state.peers_file_path,
 
 	ets:tab2file(Tid, PeersFilePath).
 
@@ -156,13 +157,14 @@ add_new_peer(IP_Address, {new, Time}, Tid) ->
 	NewEntry = {IP_Address,
 		undefined,
 		undefined,
+		undefined,
 		{new, Time},
 		0,0,0},
 
 	case ets:lookup(Tid, IP_Address) of
 		[] ->
 			ets:insert_new(Tid, NewEntry);
-		[{IP_Address, _, _, {new, _}, _, _, _}] ->
+		[{IP_Address, _, _, _, {new, _}, _, _, _}] ->
 			ets:insert(Tid, NewEntry); % update
 		[_Entry] ->
 			ok

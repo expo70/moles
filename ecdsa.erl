@@ -352,5 +352,12 @@ parse_signature_DER_test_() ->
 	16#6b6e59e1c002a4e35ba2be4d00366ea0f3e0b14c829907920705bce336ab2945})
 ].
 
+sign_and_verify_test() ->
+	PrivateKey = 12345,
+	PubKey = public_key(PrivateKey),
+	Message = protocol:dhash("Beautiful Day."),
+	Sign = signature(Message, PrivateKey, 1+protocol:nonce64()),
+	?assert(verify_signature(Sign, Message, PubKey)).
+
 
 -endif.

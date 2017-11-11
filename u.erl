@@ -123,3 +123,8 @@ remove_whitespace(Str) ->
 
 
 most(L) -> lists:reverse(tl(lists:reverse(L))).
+
+list_rotate_left1([]) -> [];
+list_rotate_left1([H|T]) -> T++[H].
+
+	

@@ -47,7 +47,7 @@ init([]) ->
 
 
 %%
-%% Entry = {Type, JobSpec, ExpirationTime, Stamps}
+%% Entry = {Target, JobSpec, ExpirationTime, Stamps}
 handle_call({find_job, IP_Address}, _From, S) ->
 	Tid = S#state.tid_jobs,
 	
@@ -63,7 +63,7 @@ handle_call({find_job, IP_Address}, _From, S) ->
 							case ets:lookup(Tid, any) of
 								[Job|_T] ->
 									ets:delete_object(Job);
-								[] -> Job = []
+								[] -> Job = not_available
 							end;
 						false ->
 							ets:delete_object(Job),
@@ -75,7 +75,7 @@ handle_call({find_job, IP_Address}, _From, S) ->
 					case ets:lookup(Tid, any) of
 						[Job|_T] ->
 							ets:delete_object(Job);
-						[] -> Job = []
+						[] -> Job = not_available
 					end
 			end
 	end,
@@ -83,8 +83,9 @@ handle_call({find_job, IP_Address}, _From, S) ->
 	{reply, Job, S}.
 
 
-handle_cast({add_job, Job}, S) ->
+handle_cast({add_job, {Target,JobSpec,DurationInSec}}, S) ->
 	Tid = S#state.tid_jobs,
+	Job = {Target, JobSpec, erlang:system_time(second)+DurationInSec, []},
 
 	true = ets:insert(Tid, Job),
 	{noreply, S}.
@@ -95,7 +96,14 @@ handle_info(check_expiration, S) ->
 
 	CurrentTime = erlang:system_time(second),
 	% delete expired jobs
-	_N_Entries = ets:select_delete(Tid, [{{'_','_','$1','_'},[{'<','$1',CurrentTime}],[true]}]),
+	N_Entries = ets:select_delete(Tid, [{{'_','_','$1','_'},
+		[{'<','$1',CurrentTime}],[true]}]),
+	case N_Entries of
+		0 -> ok;
+		_ -> io:format("~w jobs were discarded.~n", [N_Entries])
+	end,
+	
+	erlang:send_after(?CHECK_EXPIRATION_INTERVAL, self(), check_expiration),
 	{noreply, S}.
 
 

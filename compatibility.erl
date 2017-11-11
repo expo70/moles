@@ -30,11 +30,59 @@ available_byte_size_of_blockfile(Env, N) ->
 	?MAX_BLOCKFILE_SIZE - filelib:file_size(block_data_path(Env, N)).
 
 
+%FIXME, not completed
 open_blockfile_for_writing(Env, N) ->
 	Path = block_data_path(Env, N),
 	DirName = filename:dirname(Path)++ "/",
 	ok = filelib:ensure_dir(DirName),
-	{ok, _F} = file:open(Path, {write, binary, append}).
+	file:open(Path, {write, binary, append}).
+
+
+%% [Entry]
+%% Entry = {Hash, Index, PrevHash, []}
+header_entry_from_block({BlockHeader, _Txs}) ->
+	{HashStr, _Version, PrevBlockHashStr, _MerkleRootHash,
+		_TimeStamp, _Bits, _Nonce, _TxCount} = BlockHeader,
+	
+	{protocol:hash(HashStr), null, protocol:hash(PrevBlockHashStr), []}.
+
+create_header_index_from_block_data(Path, MaxBlockCount) ->
+	Entries = for_each_block_chunk(Path, fun header_entry_from_block/1,
+		MaxBlockCount),
+	[{Hash, {StartPos, Size}, PrevBlockHash, []} 
+		|| {{StartPos, Size}, {Hash, null, PrevBlockHash, []}} <- Entries].
+
+
+for_each_block_chunk(BlockDataPath, ProcessBlockFunc, MaxBlockCount) ->
+	{ok,F} = file:open(BlockDataPath, [read, binary]),
+	FileSize = filelib:file_size(BlockDataPath),
+	block_chunk_loop([], F, ProcessBlockFunc, {FileSize, FileSize}, {1,MaxBlockCount}).
+
+%FIXME, refactor by using file:position(F,cur)
+block_chunk_loop(Acc, F, ProcessBlockFunc, {RestSize, TotalSize}, {I,MaxBlockCount}) ->
+	if
+		I =< MaxBlockCount ->
+			case file:read(F, 4+4) of
+				{ok, <<_Magic:32/little, Size:32/little>>} ->
+					{ok, Bin} = file:read(F, Size),
+					{Block,<<>>} = protocol:read_block(Bin),
+					Result = ProcessBlockFunc(Block),
+					BlockStartPos = TotalSize-RestSize+(4+4),
+					RestSize1 = RestSize-Size-(4+4),
+					block_chunk_loop([{{BlockStartPos,Size},Result}|Acc],
+					F, ProcessBlockFunc, {RestSize1, TotalSize},{I+1,MaxBlockCount});
+				eof ->
+					file:close(F),
+					lists:reverse(Acc)
+			end;
+		I > MaxBlockCount ->
+			file:close(F),
+			lists:reverse(Acc)
+	end.
+
+
+
+
 
 %% Encodings of payment address etc.
 %% ref: https://en.bitcoin.it/wiki/Base58Check_encoding

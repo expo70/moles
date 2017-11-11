@@ -19,7 +19,8 @@
 -export([start_link/1,
 	save_headers/2,
 	collect_getheaders_hashes/1,
-	get_floating_root_hashes/0
+	get_floating_root_hashes/0,
+	get_best_height/0
 	]).
 
 -include_lib("eunit/include/eunit.hrl").
@@ -58,6 +59,9 @@ collect_getheaders_hashes(MaxDepth) ->
 get_floating_root_hashes() ->
 	gen_server:call(?MODULE, get_floating_root_hashes).
 
+get_best_height() ->
+	gen_server:call(?MODULE, get_best_height).
+
 
 %% ----------------------------------------------------------------------------
 %% gen_server callbacks
@@ -81,9 +85,10 @@ init([NetType]) ->
 		},
 	
 	InitialState1 = load_headers_from_file(InitialState),
-	
-	erlang:send_after(?TREE_UPDATE_INTERVAL, self(), update_tree),
-	{ok, InitialState1}.
+	% blocking
+	{_, InitialState2} = handle_info(update_tree, InitialState1),
+	%erlang:send_after(?TREE_UPDATE_INTERVAL, self(), update_tree),
+	{ok, InitialState2}.
 
 
 handle_call({collect_getheaders_hashes, MaxDepth}, _From, S) ->
@@ -108,6 +113,15 @@ handle_call(get_floating_root_hashes, _From, S) ->
 			GenesisBlockHash = rules:genesis_block_hash(S#state.net_type),
 			[Hash || {Hash,_,PrevHash,_} <- Roots,
 				PrevHash =/= GenesisBlockHash]
+	end;
+handle_call(get_best_height, _From, S) ->
+	case S#state.tid_tree of
+		undefined -> {reply, not_ready, S};
+		_Tid ->
+			case S#state.tips of
+				[] -> {reply, 0, S};
+				[{Height,_Leaf}|_T] -> {reply, Height, S}
+			end
 	end.
 
 
@@ -166,20 +180,21 @@ handle_info(update_tree, S) ->
 			report_errornous_entries(NewEntriesWithError)
 	end,
 
-	case NewEntriesNonError of
-		[ ] -> {noreply, S};
+	S1 = case NewEntriesNonError of
+		[ ] -> S;
 		 _  ->
 		 	case S#state.tid_tree of
 				undefined -> % do initialize
-					S1 = initialize_tree(NewEntriesNonError, S),
-					{noreply, S1#state{new_entries=[]}};
+					initialize_tree(NewEntriesNonError, S),
+					S#state{new_entries=[]};
 				_ ->
-					S1 = update_tree(NewEntriesNonError, S),
-					{noreply, S1#state{new_entries=[]}}
+					update_tree(NewEntriesNonError, S),
+					S#state{new_entries=[]}
 			end
-	end.
+	end,
 
-
+	erlang:send_after(?TREE_UPDATE_INTERVAL, self(), update_tree),
+	{noreply, S1}.
 
 
 
