@@ -24,7 +24,7 @@
 	]).
 
 -include_lib("eunit/include/eunit.hrl").
--include("./include/constants.hrl").
+-include("../include/constants.hrl").
 
 -define(HEADER_SIZE, 81). % 80 + byte_size(var_int(0))
 -define(TREE_UPDATE_INTERVAL, 10*1000).

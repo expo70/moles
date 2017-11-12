@@ -765,11 +765,11 @@ partition(N, X, [H|T], Acc) ->
 
 
 nonce64() ->
-	 2^64
+	% 2^64
 	rand:uniform(18446744073709551616)-1.
 
 nonce64bin() ->
-	crypto:rand_bytes(8).
+	crypto:strong_rand_bytes(8).
 
 
 most(L) when is_list(L) ->

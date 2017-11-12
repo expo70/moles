@@ -1,0 +1,16 @@
+{application, moles,
+ [{description, "A Bitcoin Node"},
+  {vsn, "0.1.0"},
+  {registered, [moles_sup, comm_sup, acceptor, blockchain, peer_finder, jobs, strategy, ecdsa, protocol, u]},
+  {mod, { moles_app, [regtest]}},
+  {applications,
+   [kernel,
+    stdlib
+   ]},
+  {env,[]},
+  {modules, []},
+
+  {maintainers, []},
+  {licenses, [""]},
+  {links, []}
+ ]}.

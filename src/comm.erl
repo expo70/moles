@@ -14,7 +14,7 @@
 %% Once sockets are estabilished, threre are no essential differences 
 %% in the communication.
 -module(comm).
--include("./include/constants.hrl").
+-include("../include/constants.hrl").
 
 -behaviour(gen_server).
 
@@ -93,6 +93,12 @@ start_link([_NetType, {_CommType, _CommTarget}]=Args) ->
 %%
 %% NOTE: don't use incoming socket in this function
 init([NetType, {CommType, CommTarget}]) ->
+	% regtest setups
+	%NetType = regtest,
+	%PeerAddress = {127,0,0,1},
+	%PeerPort = port(NetType)+1, %bitcoind -regtest -port=xxxx -daemon
+	%MyAddress = {127,0,0,1},
+	%MyPort = port(NetType),
 
 	MyAddress = {202,218,2,35},
 	MyProtocolVersion = 70015, %latest version at this time
@@ -259,7 +265,7 @@ create_version_message(S) ->
 		{PeerAddress, PeerPort, PeerServices, PeerProtocolVersion},
 		{MyAddress, MyPort, MyServices, MyProtocolVersion},
 		VersionNonce,
-		"/Moles:0.0.1/", MyBestHeight, RelayQ
+		"/Moles:0.1.0/", MyBestHeight, RelayQ
 	),
 	
 	{Message, S#state{version_nonce=VersionNonce}}.

@@ -2,7 +2,7 @@
 %%
 -module(rules).
 -include_lib("eunit/include/eunit.hrl").
--include("./include/constants.hrl").
+-include("../include/constants.hrl").
 
 -compile(export_all).
 
