@@ -9,6 +9,8 @@
 %%
 -module(blockchain).
 -compile(export_all).
+-include_lib("eunit/include/eunit.hrl").
+
 
 -behaviour(gen_server).
 
@@ -20,7 +22,8 @@
 	save_headers/2,
 	collect_getheaders_hashes/1,
 	get_floating_root_hashes/0,
-	get_best_height/0
+	get_best_height/0,
+	get_proposed_headers_hashes/2
 	]).
 
 -include_lib("eunit/include/eunit.hrl").
@@ -61,6 +64,10 @@ get_floating_root_hashes() ->
 
 get_best_height() ->
 	gen_server:call(?MODULE, get_best_height).
+
+get_proposed_headers_hashes(PeerTreeHashes, StopHash) ->
+	gen_server:call(?MODULE,
+		{get_proposed_headers_hashes, PeerTreeHashes, StopHash}).
 
 
 %% ----------------------------------------------------------------------------
@@ -122,6 +129,36 @@ handle_call(get_best_height, _From, S) ->
 				[] -> {reply, 0, S};
 				[{Height,_Leaf}|_T] -> {reply, Height, S}
 			end
+	end;
+handle_call({get_proposed_headers_hashes, PeerTreeHashes, StopHash},
+	_From, S) ->
+	Tid = S#state.tid_tree,
+	Tips = S#state.tips,
+
+	case Tips of
+		[ ] -> {reply, [], S};
+		 _  ->
+		 	Hashes =
+		 	case find_first_common_entry(PeerTreeHashes, Tid) of
+				not_found ->
+					{_H, TipEntry} = hd(Tips),
+					NetType = S#state.net_type,
+					GenesisBlockHash = rules:genesis_block_hash(NetType),
+					lists:reverse(go_down_tree_before(TipEntry, 
+						GenesisBlockHash, Tid));
+				Entry ->
+					{_H, {TipHash,_,_,_}} = hd(Tips),
+					climb_tree_until(Entry, TipHash, Tid)
+			end,
+			Hashes1 = lists:sublist(Hashes,rules:max_headers_counts()),
+			Hashes2 =
+			case StopHash of
+				?HASH256_ZERO_BIN -> Hashes1;
+				_ -> u:take_until(StopHash, Hashes1)
+			end,
+			
+			Tips1 = u:list_rotate_left1(Tips),
+			{reply, Hashes2, S#state{tips=Tips1}}
 	end.
 
 
@@ -426,5 +463,99 @@ report_errornous_entries(Entries) ->
 	io:format("~w~n", [Entries])
 	.
 
+
+climb_tree_until({_Hash,_Index,_PrevHash,NextHashes}=_Start, GoalHash,
+	TidTree) ->
+	
+	try go_next_loop([],NextHashes,GoalHash,TidTree) of
+		_NotFound -> []
+	catch
+		throw:Acc -> lists:reverse(Acc)
+	end.
+
+go_next_loop(Acc,[], _, _) -> Acc;
+go_next_loop(Acc, [NextHash|T], GoalHash, TidTree) ->
+	case NextHash of
+		GoalHash -> throw([GoalHash|Acc]);
+		_ ->
+			[{NextHash, _,_, NextNextHashes}] = ets:lookup(TidTree, NextHash),
+			go_next_loop([NextHash|Acc], NextNextHashes, GoalHash, TidTree),
+			go_next_loop(Acc, T, GoalHash, TidTree)
+	end.
+
+
+find_first_common_entry(Hashes, TidTree) ->
+	try find_first_loop(Hashes, TidTree) of
+		_NotFound -> not_found
+	catch
+		throw:Found -> Found
+	end.
+
+find_first_loop([], _TidTree) -> not_found;
+find_first_loop([Hash|T], TidTree) ->
+	case ets:lookup(TidTree, Hash) of
+		[] -> find_first_loop(T, TidTree);
+		[Found] -> throw(Found)
+	end.
+
+
+go_down_tree_before({Hash,_Index,PrevHash,_NextHashes}=_Start, GoalHash,
+	TidTree) ->
+	go_prev_loop([Hash], PrevHash, GoalHash, TidTree).
+
+go_prev_loop(Acc, PrevHash, GoalHash, TidTree) ->
+	case PrevHash of
+		GoalHash -> lists:reverse(Acc);
+		_ ->
+			case ets:lookup(TidTree, PrevHash) of
+				[] -> throw(goal_not_found);
+				[{PrevHash,_Index,PrevPrevHash,_PrevNextHashes}] ->
+					go_prev_loop([PrevHash|Acc], PrevPrevHash, GoalHash,
+						TidTree)
+			end
+	end.
+
+
+-ifdef(EUNIT).
+
+climb_tree_until_test() ->
+	TidTree = ets:new(tree,[]),
+	ets:insert_new(TidTree,{1,1,0,[2]}),
+	ets:insert_new(TidTree,{2,2,1,[3]}),
+	ets:insert_new(TidTree,{3,3,2,[4,6]}),
+	ets:insert_new(TidTree,{4,4,3,[5]}),
+	ets:insert_new(TidTree,{5,5,4,[]}),
+	ets:insert_new(TidTree,{6,6,3,[7]}),
+	ets:insert_new(TidTree,{7,7,6,[8,9]}),
+	ets:insert_new(TidTree,{8,8,7,[]}),
+	ets:insert_new(TidTree,{9,9,7,[10]}),
+	ets:insert_new(TidTree,{10,10,9,[11]}),
+	ets:insert_new(TidTree,{11,11,10,[]}),
+	?assertEqual(
+		[6,7,9,10],
+		climb_tree_until({3,3,2,[4,6]},10,TidTree) 
+		),
+	?assertEqual(
+		[6,7,9,10,11],
+		climb_tree_until({3,3,2,[4,6]},11,TidTree) 
+		),
+	?assertEqual(
+		[4,5],
+		climb_tree_until({3,3,2,[4,6]},5,TidTree) 
+		),
+	?assertEqual(
+		[],
+		climb_tree_until({3,3,2,[4,6]},100,TidTree) 
+		),
+	?assertEqual(
+		{3,3,2,[4,6]},
+		find_first_common_entry([100,101,102,103,104,3,2,1], TidTree)
+		),
+	?assertEqual(
+		[11,10,9,7,6,3,2,1],
+		go_down_tree_before({11,11,10,[]},0,TidTree)
+		).
+
+-endif.
 
 

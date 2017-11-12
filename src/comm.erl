@@ -93,14 +93,12 @@ start_link([_NetType, {_CommType, _CommTarget}]=Args) ->
 %%
 %% NOTE: don't use incoming socket in this function
 init([NetType, {CommType, CommTarget}]) ->
-	% regtest setups
-	%NetType = regtest,
-	%PeerAddress = {127,0,0,1},
-	%PeerPort = port(NetType)+1, %bitcoind -regtest -port=xxxx -daemon
-	%MyAddress = {127,0,0,1},
-	%MyPort = port(NetType),
-
-	MyAddress = {202,218,2,35},
+	MyAddress =
+	case NetType of
+		mainnet -> application:get_env(my_global_address);
+		testnet -> application:get_env(my_global_address);
+		regtest -> application:get_env(my_local_address)
+	end,
 	MyProtocolVersion = 70015, %latest version at this time
 	MyServices = protocol:services([node_witness]),
 	MyBestHeight = strategy:get_best_height(),
@@ -146,6 +144,13 @@ handle_call(_Request, _From, S) ->
 
 handle_cast({assync_init_outgoing, {PeerAddress, PeerPort}, S}, _S) ->
 	io:format("connecting to ~p:~p...~n",[PeerAddress, PeerPort]),
+	NetType = S#state.net_type,
+	MyAddress = S#state.my_address,
+	if
+		(PeerAddress =:= MyAddress) andalso (NetType =/= regtest) ->
+			stop(connection_to_itself, S);
+		true -> ok
+	end,
 	
 	% start with {active, false}
 	% after the first recv, chenage to {active, once}
@@ -367,13 +372,16 @@ process_pong(Payload, S) ->
 
 
 process_addr(Payload, S) ->
-	io:format("Packet (addr) = ~p~n", [protocol:parse_addr(Payload,S#state.my_protocol_version)]),
+	%io:format("Packet (addr) = ~p~n", [protocol:parse_addr(Payload,S#state.my_protocol_version)]),
+	Addr = protocol:parse_addr(Payload,S#state.my_protocol_version),
+	strategy:got_addr(Addr, S#state.peer_address),
 	S.
 
 
 process_getheaders(Payload, S) ->
 	%io:format("Packet (getheaders) = ~p~n", [protocol:parse_getheaders(Payload)]),
-	strategy:got_getheaders(Payload, S#state.peer_address),
+	GetHeaders = protocol:parse_getheaders(Payload),
+	strategy:got_getheaders(GetHeaders, S#state.peer_address),
 	S.
 
 process_sendheaders(Payload, S) ->
@@ -383,6 +391,7 @@ process_sendheaders(Payload, S) ->
 
 process_headers(Payload, S) ->
 	%io:format("Packet (headers) = ~p~n", [protocol:parse_headers(Payload)]),
+	_Headers = protocol:parse_headers(Payload), % syntactic check
 	strategy:got_headers(Payload, S#state.peer_address),
 	S.
 

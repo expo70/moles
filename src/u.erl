@@ -58,13 +58,11 @@ transpose([[]|_]) -> [];
 transpose(M) ->
   [lists:map(fun hd/1, M) | transpose(lists:map(fun tl/1, M))].
 
+
 %% Ranges
-% A - B
 range(Max) when is_integer(Max), Max>0 ->
 	lists:seq(1,Max).
 
-subtract_range(RangeA, RangeB) ->
-	[Elm || Elm <- RangeA, not lists:member(Elm, RangeB)].
 
 %% Partition
 % from https://stackoverflow.com/questions/31395608/how-to-split-a-list-of-strings-into-given-number-of-lists-in-erlang
@@ -127,4 +125,12 @@ most(L) -> lists:reverse(tl(lists:reverse(L))).
 list_rotate_left1([]) -> [];
 list_rotate_left1([H|T]) -> T++[H].
 
-	
+
+take_until(Elem, List) ->
+	case lists:member(Elem, List) of
+		false -> List;
+		true ->
+			lists:takewhile(fun(E)-> E=/=Elem end, List) ++ [Elem]
+	end.
+
+

@@ -14,7 +14,7 @@
 
 %% API
 -export([start_link/1, add_peer/1, remove_peer/1, get_best_height/0, 
-	got_headers/2, got_getheaders/2]).
+	got_headers/2, got_getheaders/2, got_addr/2]).
 
 %% gen_server callbak
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2]).
@@ -40,8 +40,11 @@ get_best_height() ->
 got_headers(Payload, Origin) ->
 	gen_server:cast(?MODULE, {got_headers, Payload, Origin}).
 
-got_getheaders(Payload, Origin) ->
-	gen_server:cast(?MODULE, {got_getheaders, Payload, Origin}).
+got_getheaders(GetHeaders, Origin) ->
+	gen_server:cast(?MODULE, {got_getheaders, GetHeaders, Origin}).
+
+got_addr(Addr, Origin) ->
+	gen_server:cast(?MODULE, {got_addr, Addr, Origin}).
 
 
 %% ----------------------------------------------------------------------------
@@ -82,6 +85,7 @@ handle_cast({add_peer, IP_Address}, S) ->
 			end
 	end,
 	
+	peer_finder:new_peer(IP_Address),
 	{noreply, S#state{n_peers=N_Peers+1}};
 handle_cast({remove_peer, PeerInfo}, S) ->
 	N_Peers = S#state.n_peers,
@@ -93,10 +97,41 @@ handle_cast({got_headers, Payload, Origin}, S) ->
 	blockchain:save_headers(Payload, Origin),
 
 	{noreply, S};
-handle_cast({got_getheaders, Payload, Origin}, S) ->
+handle_cast({got_getheaders, {_Version, HashStrs, StopHashStr}, Origin}, S) ->
+	PeerTreeHashes = [protocol:hash(H) || H <- HashStrs],
+	StopHash = protocol:hash(StopHashStr),
+	MyHashes = blockchain:get_proposed_headers_hashes(PeerTreeHashes, 
+		StopHash),
 	
-	{_Version, Hashes, StopHash} = protocol:parse_getheaders(Payload),
+	%jobs:add_job(Origin, {headers, }, 60),
 	
+	{noreply, S};
+handle_cast({got_addr, NetAddrs, Origin}, S) ->
+	NetType = S#state.net_type,
+	
+	introduce_peers(NetAddrs),
+	JobSpecs = [
+		begin
+			% always found
+			{IP_Address, _UserAgent, ServicesFlag, _BestHeight,
+				LastUseTime, _TotalUseDuration, _TotalInBytes, _TotalOutBytes}
+				= peer_finder:find_peer(IP_Address),
+			AdvertisedTime =
+			case LastUseTime of
+				{new, Time} -> Time;
+				Time -> Time
+			end,
+			Port =
+			case NetType of
+				regtest -> rules:default_port(S#state.net_type)+1;
+				_ -> rules:default_port(S#state.net_type)
+			end,
+			{addr, {AdvertisedTime, ServicesFlag, IP_Address, Port}}
+		end
+		|| {_,_,IP_Address,_} <- NetAddrs],
+	lists:foreach(fun(J) -> jobs:add_job({{except,Origin},J,60*10}) end,
+		JobSpecs),
+
 	{noreply, S}.
 
 
@@ -122,10 +157,34 @@ request_peer(S) ->
 	case peer_finder:request_peer(new) of
 		not_available -> ok;
 		IP_Address ->
-			supervisor:add_comm(NetType, {outgoing, IP_Address}) 
+			Port = 
+			case NetType of
+				% for regtest we assign modified port number to bitcoind
+				% The default port number is used by Moles.
+				regtest -> rules:default_port(NetType)+1;
+				_ -> rules:default_port(NetType)
+			end,
+			supervisor:add_comm(NetType, {outgoing, {IP_Address,Port}}) 
 	end,
 	
 	erlang:send_after(?CHECK_N_PEERS_INTERVAL, self(), check_n_peers),
 	{noreply, S}.
 
+
+% {Time,
+% 	parse_services(Services),
+%	parse_ip_address(IPAddress),
+%	Port}
+introduce_peers([]) -> ok;
+introduce_peers([{Time, Services, IP_Address, _Port}|T]) ->
+	PeerInfo =
+	case Time of
+		null -> {IP_Address, undefined, Services, undefined,
+			{new,erlang:system_time(second)}, 0, 0, 0};
+		_ -> {IP_Address, undefined, Services, undefined,
+			{new,Time}, 0, 0, 0}
+	end,
+		
+	peer_finder:register_peer(PeerInfo),
+	introduce_peers(T).
 

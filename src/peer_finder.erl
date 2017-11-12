@@ -6,7 +6,8 @@
 
 
 % API
--export([start_link/1, request_peer/1, update_peer/2]).
+-export([start_link/1,
+	request_peer/1, update_peer/1, new_peer/1, register_peer/1, find_peer/1]).
 
 % gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
@@ -36,9 +37,17 @@ start_link(NetType) ->
 request_peer(Priority) ->
 	gen_server:call(?MODULE, {request_peer, Priority}).
 
-update_peer(Address, PeerInfo) ->
-	gen_server:cast(?MODULE, {update_peer, Address, PeerInfo}).
+find_peer(IP_Address) ->
+	gen_server:call(?MODULE, {find_peer, IP_Address}).
 
+update_peer(PeerInfo) ->
+	gen_server:cast(?MODULE, {update_peer, PeerInfo}).
+
+new_peer(IP_Address) ->
+	gen_server:cast(?MODULE, {new_peer, IP_Address}).
+
+register_peer(PeerInfo) ->
+	gen_server:cast(?MODULE, {register_peer, PeerInfo}).
 
 
 %% ----------------------------------------------------------------------------
@@ -91,14 +100,30 @@ handle_call({request_peer, new=_Priority}, _From, S) ->
 		 	Reply = hd(IPs),
 			ets:insert(TidPeersUsed, {Reply}),
 			{reply, Reply, S}
-	end.
+	end;
+handle_call({find_peer, IP_Address}, _From, S) ->
+	Tid = S#state.tid_peers,
+
+	Reply =
+	case ets:lookup(Tid, IP_Address) of
+		[] -> not_found;
+		[PeerInfo] -> PeerInfo
+	end,
+
+	{reply, Reply, S}.
 
 
 handle_cast({dns_seeds, S}, _S) ->
+	NetType = S#state.net_type,
 	Tid = S#state.tid_peers,
 	DNS_Servers = S#state.dns_servers,
 	
-	IPs = ns_lookup(hd(DNS_Servers), in, a),
+	IPs = 
+	case NetType of
+		mainnet -> ns_lookup(hd(DNS_Servers), in, a);
+		testnet -> ns_lookup(hd(DNS_Servers), in, a);
+		regtest -> [{127,0,0,1}]
+	end,
 	Time = erlang:system_time(second),
 
 	lists:foreach(fun(P) -> add_new_peer(P, {new, Time}, Tid) end, IPs),
@@ -108,9 +133,6 @@ handle_cast({update_peer,{IP_Address, UserAgent, ServicesFlag, BestHeight,
 	LastUseTime, TotalUseDuration, TotalInBytes, TotalOutBytes}=PeerInfo}, S) ->
 	
 	Tid = S#state.tid_peers,
-	TidPeersUsed = S#state.tid_peers_used,
-
-	ets:insert(TidPeersUsed, {IP_Address}),
 
 	case ets:lookup(Tid, IP_Address) of
 		[] -> ets:insert_new(PeerInfo);
@@ -122,6 +144,28 @@ handle_cast({update_peer,{IP_Address, UserAgent, ServicesFlag, BestHeight,
 				OldTotalUseDuration + TotalUseDuration,
 				OldTotalInBytes + TotalInBytes,
 				OldTotalOutBytes + TotalOutBytes})
+	end,
+	
+	{noreply, S};
+handle_cast({new_peer, IP_Address},S) ->
+	Tid = S#state.tid_peers,
+	TidPeersUsed = S#state.tid_peers_used,
+
+	ets:insert(TidPeersUsed, {IP_Address}),
+
+	case ets:lookup(Tid, IP_Address) of
+		[ ] -> add_new_peer(IP_Address, erlang:system_time(second), Tid);
+		 _  -> ok
+	end,
+
+	{noreply, S};
+handle_cast({register_peer, {IP_Address,_,_,_,_,_,_,_}=PeerInfo}, S) ->
+	
+	Tid = S#state.tid_peers,
+
+	case ets:lookup(Tid, IP_Address) of
+		[ ] -> ets:insert_new(PeerInfo);
+		 _  -> ok
 	end,
 	
 	{noreply, S}.
@@ -173,4 +217,5 @@ add_new_peer(IP_Address, {new, Time}, Tid) ->
 
 dns_servers(testnet) -> [
 	"testnet-seed.bitcoin.schildbach.de"
-	].
+	];
+dns_servers(regtest) -> [].

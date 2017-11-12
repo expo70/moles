@@ -83,6 +83,13 @@ handle_call({find_job, IP_Address}, _From, S) ->
 	{reply, Job, S}.
 
 
+handle_cast({add_job, {{except, IP_Address},JobSpec,DurationInSec}}, S) ->
+	Tid = S#state.tid_jobs,
+	Job = {all, JobSpec, erlang:system_time(second)+DurationInSec,
+		[IP_Address]},
+	
+	true = ets:insert(Tid, Job),
+	{noreply, S};
 handle_cast({add_job, {Target,JobSpec,DurationInSec}}, S) ->
 	Tid = S#state.tid_jobs,
 	Job = {Target, JobSpec, erlang:system_time(second)+DurationInSec, []},

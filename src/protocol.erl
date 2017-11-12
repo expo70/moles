@@ -134,7 +134,7 @@ parse_net_addr(<<Time:32/little, Rest:(8+16+2)/binary>>) -> parse_net_addr(Time,
 parse_net_addr(<<Bin:(8+16+2)/binary>>) -> parse_net_addr(null, Bin).
 
 parse_net_addr(Time, <<Services:64/little, IPAddress:16/binary, Port:16/big>>) ->
-	{date_time(Time), parse_services(Services), parse_ip_address(IPAddress), Port}.
+	{Time, parse_services(Services), parse_ip_address(IPAddress), Port}.
 
 read_net_addr(Bin, ProtocolVersion) ->
 	if
@@ -144,7 +144,7 @@ read_net_addr(Bin, ProtocolVersion) ->
 			Time=null,
 			<<Services:64/little, IPAddress:16/binary, Port:16/big, Rest/binary>> = Bin
 	end,
-	{{date_time(Time), parse_services(Services), parse_ip_address(IPAddress), Port}, Rest}.
+	{{Time, parse_services(Services), parse_ip_address(IPAddress), Port}, Rest}.
 
 read_net_addr_n(Bin, N, ProtocolVersion) -> read_net_addr_n([], N, Bin, ProtocolVersion).
 
@@ -541,7 +541,7 @@ merkle_hash(Txids) when is_list(Txids) ->
 read_block_header(<<Version:32/little, PrevBlock:32/binary, MerkleRoot:32/binary, Timestamp:32/little, Bits:32/little, Nonce:32/little, Rest/binary>>) ->
 	Hash = block_hash(Version, PrevBlock, MerkleRoot, Timestamp, Bits, Nonce),
 	{TxnCount, Rest1} = read_var_int(Rest),
-	{{parse_hash(Hash), Version, parse_hash(PrevBlock), parse_hash(MerkleRoot), date_time(Timestamp), parse_difficulty_target(Bits), Nonce, TxnCount}, Rest1}.
+	{{parse_hash(Hash), Version, parse_hash(PrevBlock), parse_hash(MerkleRoot), Timestamp, parse_difficulty_target(Bits), Nonce, TxnCount}, Rest1}.
 
 
 %% for headers message
@@ -730,26 +730,10 @@ unix_timestamp() ->
 	Timestamp = Mega*1000000 + Secs,
 	Timestamp.
 
-date_time(null) -> null;
-date_time(SecondsFromEpoch) when is_integer(SecondsFromEpoch), SecondsFromEpoch>=0 ->
-	Base = calendar:datetime_to_gregorian_seconds({{1970,1,1},{0,0,0}}),
-	calendar:gregorian_seconds_to_datetime(Base + SecondsFromEpoch).
-
-%% FIXME, remove
-bin_to_hexstr(Bin) -> bin_to_hexstr(Bin,"").
-
-bin_to_hexstr(Bin,Sep) ->
-  string:to_lower(lists:flatten(string:join([io_lib:format("~2.16.0B", [X]) ||
-      X <- binary_to_list(Bin)], Sep))).
-
-hexstr_to_bin("") -> <<>>;
-hexstr_to_bin(Str) ->
-	T = partition(Str, 2),
-	list_to_binary([list_to_integer(S,16) || S <- T]).
-
-hexstr_to_bin(Str,Sep) ->
-	T = string:tokens(Str,Sep),
-	list_to_binary([list_to_integer(S,16) || S <- T]).
+%date_time(null) -> null;
+%date_time(SecondsFromEpoch) when is_integer(SecondsFromEpoch), SecondsFromEpoch>=0 ->
+%	Base = calendar:datetime_to_gregorian_seconds({{1970,1,1},{0,0,0}}),
+%	calendar:gregorian_seconds_to_datetime(Base + SecondsFromEpoch).
 
 
 % from https://stackoverflow.com/questions/31395608/how-to-split-a-list-of-strings-into-given-number-of-lists-in-erlang
@@ -864,20 +848,6 @@ bin12_to_atom_test_() ->
 		?_assertEqual(bin12_to_atom(atom_to_bin12(version)), version)
 	].
 
-bin_to_hexstr_test_() ->
-	[
-		?_assertEqual(bin_to_hexstr(<<>>), ""),
-		?_assertEqual(bin_to_hexstr(<<1,2,3,16#FF>>), "010203ff"),
-		?_assertEqual(bin_to_hexstr(<<1,2,3,16#FF>>, " "), "01 02 03 ff")
-	].
-
-hexstr_to_bin_test_() ->
-	[
-		?_assertEqual(hexstr_to_bin(""), <<>>),
-		?_assertEqual(hexstr_to_bin(bin_to_hexstr(<<1,2,3,16#FF>>)), <<1,2,3,16#FF>>),
-		?_assertEqual(hexstr_to_bin(bin_to_hexstr(<<1,2,3,16#FF>>, " "), " "), <<1,2,3,16#FF>>)
-	].
-
 read_var_int_test_() ->
 	[
 		?_assertEqual(read_var_int(var_int(0)), {0,<<>>}),
@@ -900,7 +870,7 @@ services_test_() ->
 
 merkle_hash_test_() ->
 	[
-		?_assertEqual(bin_to_hexstr(merkle_hash([
+		?_assertEqual(u:bin_to_hexstr(merkle_hash([
 		hash("8cb1df74dbe980c6b9202e919597a5eabeb2d32e4de0214a39f80c5fab9e453a"),
 		hash("b7a6068e5814738422768b92b7ff81b807fd515871ed6a4172bacc0e6ff438be"),
 		hash("be327329c96d01bb0ef93977d026b802db0b59bb7bfed9773af66f2ba1f273d1"),

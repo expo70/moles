@@ -50,7 +50,7 @@ verify_signatures_in_Tx({_TxIdStr, _TxVersion, TxIns, _TxOuts, _Witnesses, _Lock
 	Delegated =
 	if
 		length(Signatures)+CoinbaseCount /= N_TxIns ->
-			Unfiltered = u:subtract_range(u:range(N_TxIns), Indexes++CoinbaseIndexes),
+			Unfiltered = u:range(N_TxIns) -- (Indexes++CoinbaseIndexes),
 			verify_signatures_in_Tx2(Tx, Unfiltered);
 		length(Signatures)+CoinbaseCount == N_TxIns -> []
 	end,
@@ -103,7 +103,7 @@ verify_signatures_in_Tx2({_TxIdStr, _TxVersion, TxIns, _TxOuts, _Witnesses, _Loc
 	Delegated =
 	if
 		length(Indexes1) /= length(Indexes) ->
-			Unfiltered = u:subtract_range(Indexes, Indexes1),
+			Unfiltered = Indexes -- Indexes1,
 			verify_signatures_in_Tx3(Tx, Unfiltered);
 		length(Indexes1) == length(Indexes) -> []
 	end,
@@ -194,7 +194,7 @@ verify_signatures_in_Tx3({_TxIdStr, _TxVersion, TxIns, _TxOuts, _Witnesses, _Loc
 	Native_Witness_Indexes = [Idx || {Idx, _PrevOut, {scriptSig, {native_witness, <<>>}},_Sequence} <- TxIns],
 
 	ToProcessIndexes = NestedP2WPKH_Indexes ++ NestedP2WSH_Indexes ++ Native_Witness_Indexes,
-	UnfilteredIndexes = u:subtract_range(Indexes, ToProcessIndexes),
+	UnfilteredIndexes = Indexes -- ToProcessIndexes,
 	Delegated =
 		case UnfilteredIndexes of
 			[ ] -> [];
@@ -402,6 +402,9 @@ default_port(regtest) -> ?DEFAULT_REGTEST_INCOMING_PORT.
 genesis_block_hash(regtest) -> ?REGTEST_GENESIS_BLOCK_HASH_BIN;
 genesis_block_hash(testnet) -> ?TESTNET_GENESIS_BLOCK_HASH_BIN.
 
+
+max_headers_counts() -> 2000.
+max_blocks_counts() -> 500.
 
 
 -ifdef(EUNIT).
