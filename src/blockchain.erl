@@ -23,7 +23,7 @@
 	collect_getheaders_hashes/1,
 	get_floating_root_hashes/0,
 	get_best_height/0,
-	get_proposed_headers_hashes/2
+	get_proposed_headers/2
 	]).
 
 -include_lib("eunit/include/eunit.hrl").
@@ -65,9 +65,9 @@ get_floating_root_hashes() ->
 get_best_height() ->
 	gen_server:call(?MODULE, get_best_height).
 
-get_proposed_headers_hashes(PeerTreeHashes, StopHash) ->
+get_proposed_headers(PeerTreeHashes, StopHash) ->
 	gen_server:call(?MODULE,
-		{get_proposed_headers_hashes, PeerTreeHashes, StopHash}).
+		{get_proposed_headers, PeerTreeHashes, StopHash}).
 
 
 %% ----------------------------------------------------------------------------
@@ -130,7 +130,7 @@ handle_call(get_best_height, _From, S) ->
 				[{Height,_Leaf}|_T] -> {reply, Height, S}
 			end
 	end;
-handle_call({get_proposed_headers_hashes, PeerTreeHashes, StopHash},
+handle_call({get_proposed_headers, PeerTreeHashes, StopHash},
 	_From, S) ->
 	Tid = S#state.tid_tree,
 	Tips = S#state.tips,
@@ -147,8 +147,8 @@ handle_call({get_proposed_headers_hashes, PeerTreeHashes, StopHash},
 					lists:reverse(go_down_tree_before(TipEntry, 
 						GenesisBlockHash, Tid));
 				Entry ->
-					{_H, {TipHash,_,_,_}} = hd(Tips),
-					climb_tree_until(Entry, TipHash, Tid)
+					{_H, TipEntry} = hd(Tips),
+					climb_tree_until(Entry, TipEntry, Tid)
 			end,
 			Hashes1 = lists:sublist(Hashes,rules:max_headers_counts()),
 			Hashes2 =
@@ -464,23 +464,24 @@ report_errornous_entries(Entries) ->
 	.
 
 
-climb_tree_until({_Hash,_Index,_PrevHash,NextHashes}=_Start, GoalHash,
+climb_tree_until({_Hash,_Index,_PrevHash,NextHashes}=_Start, Goal,
 	TidTree) ->
 	
-	try go_next_loop([],NextHashes,GoalHash,TidTree) of
+	try go_next_loop([],NextHashes,Goal,TidTree) of
 		_NotFound -> []
 	catch
 		throw:Acc -> lists:reverse(Acc)
 	end.
 
 go_next_loop(Acc,[], _, _) -> Acc;
-go_next_loop(Acc, [NextHash|T], GoalHash, TidTree) ->
+go_next_loop(Acc, [NextHash|T], {GoalHash,_,_,_}=Goal, TidTree) ->
 	case NextHash of
-		GoalHash -> throw([GoalHash|Acc]);
+		GoalHash -> throw([Goal|Acc]);
 		_ ->
-			[{NextHash, _,_, NextNextHashes}] = ets:lookup(TidTree, NextHash),
-			go_next_loop([NextHash|Acc], NextNextHashes, GoalHash, TidTree),
-			go_next_loop(Acc, T, GoalHash, TidTree)
+			[{NextHash, _,_, NextNextHashes}=Entry]
+				= ets:lookup(TidTree, NextHash),
+			go_next_loop([Entry|Acc], NextNextHashes, Goal, TidTree),
+			go_next_loop(Acc, T, Goal, TidTree)
 	end.
 
 
@@ -499,9 +500,9 @@ find_first_loop([Hash|T], TidTree) ->
 	end.
 
 
-go_down_tree_before({Hash,_Index,PrevHash,_NextHashes}=_Start, GoalHash,
+go_down_tree_before({_Hash,_Index,PrevHash,_NextHashes}=Start, GoalHash,
 	TidTree) ->
-	go_prev_loop([Hash], PrevHash, GoalHash, TidTree).
+	go_prev_loop([Start], PrevHash, GoalHash, TidTree).
 
 go_prev_loop(Acc, PrevHash, GoalHash, TidTree) ->
 	case PrevHash of
@@ -509,43 +510,47 @@ go_prev_loop(Acc, PrevHash, GoalHash, TidTree) ->
 		_ ->
 			case ets:lookup(TidTree, PrevHash) of
 				[] -> throw(goal_not_found);
-				[{PrevHash,_Index,PrevPrevHash,_PrevNextHashes}] ->
-					go_prev_loop([PrevHash|Acc], PrevPrevHash, GoalHash,
+				[{_PrevHash,_Index,PrevPrevHash,_PrevNextHashes}=Entry] ->
+					go_prev_loop([Entry|Acc], PrevPrevHash, GoalHash,
 						TidTree)
 			end
 	end.
+
+
+indexes(TreeEntries) -> [Index || {_,Index,_,_} <- TreeEntries].
 
 
 -ifdef(EUNIT).
 
 climb_tree_until_test() ->
 	TidTree = ets:new(tree,[]),
-	ets:insert_new(TidTree,{1,1,0,[2]}),
-	ets:insert_new(TidTree,{2,2,1,[3]}),
-	ets:insert_new(TidTree,{3,3,2,[4,6]}),
-	ets:insert_new(TidTree,{4,4,3,[5]}),
-	ets:insert_new(TidTree,{5,5,4,[]}),
-	ets:insert_new(TidTree,{6,6,3,[7]}),
-	ets:insert_new(TidTree,{7,7,6,[8,9]}),
-	ets:insert_new(TidTree,{8,8,7,[]}),
-	ets:insert_new(TidTree,{9,9,7,[10]}),
-	ets:insert_new(TidTree,{10,10,9,[11]}),
-	ets:insert_new(TidTree,{11,11,10,[]}),
+	E1 = {1,1,0,[2]},
+	E2 = {2,2,1,[3]},
+	E3 = {3,3,2,[4,6]},
+	E4 = {4,4,3,[5]},
+	E5 = {5,5,4,[]},
+	E6 = {6,6,3,[7]},
+	E7 = {7,7,6,[8,9]},
+	E8 = {8,8,7,[]},
+	E9 = {9,9,7,[10]},
+	E10 = {10,10,9,[11]},
+	E11 = {11,11,10,[]},
+	[ets:insert_new(TidTree,E) || E <- [E1,E2,E3,E4,E5,E6,E7,E8,E9,E10,E11]],
 	?assertEqual(
 		[6,7,9,10],
-		climb_tree_until({3,3,2,[4,6]},10,TidTree) 
+		indexes(climb_tree_until(E3,E10,TidTree))
 		),
 	?assertEqual(
 		[6,7,9,10,11],
-		climb_tree_until({3,3,2,[4,6]},11,TidTree) 
+		indexes(climb_tree_until(E3,E11,TidTree))
 		),
 	?assertEqual(
 		[4,5],
-		climb_tree_until({3,3,2,[4,6]},5,TidTree) 
+		indexes(climb_tree_until(E3,E5,TidTree))
 		),
 	?assertEqual(
 		[],
-		climb_tree_until({3,3,2,[4,6]},100,TidTree) 
+		indexes(climb_tree_until(E3,{100,100,0,[]},TidTree))
 		),
 	?assertEqual(
 		{3,3,2,[4,6]},
@@ -553,7 +558,7 @@ climb_tree_until_test() ->
 		),
 	?assertEqual(
 		[11,10,9,7,6,3,2,1],
-		go_down_tree_before({11,11,10,[]},0,TidTree)
+		indexes(go_down_tree_before(E11,0,TidTree))
 		).
 
 -endif.
