@@ -365,16 +365,16 @@ find_tips(Tid, Leaves, GenesisBlockHash) ->
 
 
 extended_tip_hashes(Tid, {Height,TipEntry}=_Tip, MaxLength) ->
-	Length = max(Height,MaxLength),
+	Length = min(Height,MaxLength),
 	collect_hash_loop([], Tid, TipEntry, Length).
 	
 % move down the tree
-collect_hash_loop(Acc, _, Entry, 1) -> lists:reverse([Entry|Acc]);
-collect_hash_loop(Acc, Tid, {_,_,PrevHash,_}=Entry, Length)
+collect_hash_loop(Acc, _, {Hash,_,_,_}, 1) -> lists:reverse([Hash|Acc]);
+collect_hash_loop(Acc, Tid, {Hash,_,PrevHash,_}=_Entry, Length)
 	when is_integer(Length) andalso Length>1 ->
 	
 	[PrevEntry] = ets:lookup(Tid, PrevHash),
-	collect_hash_loop([Entry|Acc], Tid, PrevEntry, Length-1).
+	collect_hash_loop([Hash|Acc], Tid, PrevEntry, Length-1).
 
 
 % Required difficulty for tblocks should depend on their 
@@ -561,6 +561,14 @@ climb_tree_until_test() ->
 	E10 = {10,10,9,[11]},
 	E11 = {11,11,10,[]},
 	[ets:insert_new(TidTree,E) || E <- [E1,E2,E3,E4,E5,E6,E7,E8,E9,E10,E11]],
+	?assertEqual(
+		[11,10,9,7],
+		extended_tip_hashes(TidTree, {8,E11}, 4)
+		),
+	?assertEqual(
+		[11,10,9,7,6,3,2,1],
+		extended_tip_hashes(TidTree, {8,E11}, 9)
+		),
 	?assertEqual(
 		[6,7,9,10],
 		indexes(climb_tree_until(E3,E10,TidTree))
