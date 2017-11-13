@@ -58,7 +58,7 @@ init([NetType]) ->
 		best_height = BestHeight
 	},
 	
-	%erlang:send_after(200, self(), check_n_peers), % start accessing peers
+	erlang:send_after(200, self(), check_n_peers), % start accessing peers
 	{ok, InitialState}.
 
 
