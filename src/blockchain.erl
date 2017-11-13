@@ -192,36 +192,18 @@ handle_call({get_proposed_headers, PeerTreeHashes, StopHash},
 %% * has a hash that does not exist in the current table
 %% * its hash satisfies its decleared difficulty (nBits)
 handle_cast({save_headers, HeadersPayload, Origin}, S) ->
-	Tid = S#state.tid_tree,
+	Tid = S#state.tid_tree, %NOTE, meybe undefined
 	HeadersFilePath = S#state.headers_file_path,
 
-	{_N_Headers, Rest} = protocol:parse_var_int(HeadersPayload),
+	{_N_Headers, Rest} = protocol:read_var_int(HeadersPayload),
 
 	%NOTE: the file is created if it does not exist.
 	{ok,F} = file:open(HeadersFilePath,[write,binary,append]),
 
-	SaveFunc = fun(HeaderBin) ->
-		{{HashStr,PrevHashStr,_,_,_,DifficultyTarget,_,0},<<>>} =
-			protocol:read_block_header(HeaderBin),
-		Hash = protocol:hash(HashStr),
-		PrevHash = protocol:hash(PrevHashStr),
-		case ets:member(Tid, Hash) of
-			false ->
-				case Hash =< DifficultyTarget of
-					true ->
-						{ok,Position} = file:position(F, cur),
-						ok = file:write(F, HeaderBin),
-						{Hash,{headers,Position},PrevHash,[]};
-					false ->
-						{{error, not_satisfy_difficulty}, Origin, Hash}
-				end;
-			true -> {{error, already_have}, Origin, Hash}
-		end
-	end,
-
-	NewEntries  = list:reverse(S#state.new_entries),
+	NewEntries  = lists:reverse(S#state.new_entries),
 	NewEntries1 = for_each_header_chunk_from_bin(NewEntries,
-		SaveFunc, Rest, Origin),
+		fun save_header_func/3, Rest, Origin, {F,Tid}),
+
 	file:close(F),
 
 	{noreply, S#state{new_entries=NewEntries1}}.
@@ -261,14 +243,6 @@ handle_info(update_tree, S) ->
 	io:format("blockchain:update_tree finished.~n",[]),
 	erlang:send_after(?TREE_UPDATE_INTERVAL, self(), update_tree),
 	{noreply, S1}.
-
-
-
-
-
-
-
-
 
 
 
@@ -467,7 +441,7 @@ read_header_chunk_loop(Acc, F) ->
 				protocol:hash(PrevHashStr),
 				[]},
 			read_header_chunk_loop([Entry|Acc], F);
-		eof -> list:reverse(Acc)
+		eof -> lists:reverse(Acc)
 	end.
 
 
@@ -489,26 +463,46 @@ load_headers_from_file(Indexes, S) ->
 	Payload.
 
 
-for_each_header_chunk_from_bin(Acc, _, <<>>, _) -> lists:reverse(Acc);
+for_each_header_chunk_from_bin(Acc, _, <<>>, _,{_,_}) -> lists:reverse(Acc);
 for_each_header_chunk_from_bin(Acc, ProcessHeaderFunc,
-	Bin, Origin) ->
+	Bin, Origin, {F,Tid}) ->
 	<<HeaderBin:?HEADER_SIZE/binary, Rest/binary>> = Bin,
 	
 	Result =
-	try ProcessHeaderFunc(HeaderBin) of
+	try ProcessHeaderFunc(HeaderBin,Origin,{F,Tid}) of
 		Any -> Any
 	catch
 		Class:Reason -> {{Class,Reason}, Origin, HeaderBin}
 	end,
 	
 	for_each_header_chunk_from_bin([Result|Acc],
-		ProcessHeaderFunc, Rest, Origin).
+		ProcessHeaderFunc, Rest, Origin, {F,Tid}).
 
 
 report_errornous_entries(Entries) ->
 	io:format("reporting ~w errornous header entries:~n", [length(Entries)]),
 	io:format("~w~n", [Entries])
 	.
+
+
+save_header_func(HeaderBin, Origin, {F,Tid}) ->
+	{{HashStr,_,PrevHashStr,_,_,DifficultyTarget,_,0},<<>>} =
+		protocol:read_block_header(HeaderBin),
+	Hash = protocol:hash(HashStr),
+	<<HashInt:256/little>> = Hash,
+	PrevHash = protocol:hash(PrevHashStr),
+	case Tid=/=undefined andalso ets:member(Tid, Hash) of
+		false ->
+			case HashInt =< DifficultyTarget of
+				true ->
+					{ok,Position} = file:position(F, cur),
+					ok = file:write(F, HeaderBin),
+					{Hash,{headers,Position},PrevHash,[]};
+				false ->
+					{{error, not_satisfy_difficulty}, Origin, Hash}
+			end;
+		true -> {{error, already_have}, Origin, Hash}
+	end.
 
 
 climb_tree_until({_Hash,_Index,_PrevHash,NextHashes}=_Start, Goal,

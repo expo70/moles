@@ -213,7 +213,7 @@ handle_info(ping, S) ->
 	case S#state.timer_ref_ping_timeout of
 		undefined ->
 			Message = protocol:ping(NetType),
-			S0 = send(S#state.socket, Message, S),
+			{ok,S0} = send(S#state.socket, Message, S),
 			TimerRefPingTimeout =
 				erlang:send_after(?PING_TIMEOUT, self(), ping_timeout),
 			S0#state{timer_ref_ping_timeout=TimerRefPingTimeout};
@@ -533,18 +533,20 @@ on_handshake(S) ->
 do_job({_Target, JobSpec, _ExpirationTime, _Stamps}, S) ->
 	Socket = S#state.socket,
 	NetType = S#state.net_type,
+	ProtocolVersion = S#state.my_protocol_version,
 
 	case JobSpec of
 		{getheaders, Hashes} ->
 			io:format("comm:job getheaders~n",[]),
 			HashStrs = [protocol:parse_hash(H) || H <- Hashes],
-			Message = protocol:getheaders(NetType,HashStrs,?HASH256_ZERO_STR),
-			S1 = send(Socket, Message, S),
+			Message = protocol:getheaders(NetType,
+				{ProtocolVersion, HashStrs, ?HASH256_ZERO_STR}),
+			{ok,S1} = send(Socket, Message, S),
 			S1;
 		{headers, Payload} ->
 			io:format("comm:job headers~n",[]),
 			Message = protocol:message(NetType,headers,Payload),
-			S1 = send(Socket, Message, S),
+			{ok,S1} = send(Socket, Message, S),
 			S1;
 		Unknown ->
 			io:format("Unknown job spec detected: ~w~n",[Unknown]),
