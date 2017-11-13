@@ -21,6 +21,7 @@
 -export([start_link/1,
 	save_headers/2,
 	collect_getheaders_hashes/1,
+	collect_getheaders_hashes_exponential/1,
 	get_floating_root_hashes/0,
 	get_best_height/0,
 	get_proposed_headers/2
@@ -58,6 +59,9 @@ save_headers(HeadersPayload, Origin) ->
 
 collect_getheaders_hashes(MaxDepth) ->
 	gen_server:call(?MODULE, {collect_getheaders_hashes, MaxDepth}).
+
+collect_getheaders_hashes_exponential({A,P}) ->
+	gen_server:call(?MODULE, {collect_getheaders_hashes_exponential, {A,P}}).
 
 get_floating_root_hashes() ->
 	gen_server:call(?MODULE, get_floating_root_hashes).
@@ -108,9 +112,25 @@ handle_call({collect_getheaders_hashes, MaxDepth}, _From, S) ->
 			Advertise =
 			case Tips of
 				[ ] -> [[GenesisBlockHash]];
-		 		_  -> [extended_tip_hashes(Tid, T, MaxDepth) || T <- Tips]
+		 		 _  -> [extended_tip_hashes(Tid, T, MaxDepth) || T <- Tips]
 			end,
 			{reply, Advertise, S}
+	end;
+handle_call({collect_getheaders_hashes_exponential, {A,P}}, _From, S) ->
+	case S#state.tid_tree of
+		undefined -> {reply, not_ready, S};
+		Tid ->
+			GenesisBlockHash = rules:genesis_block_hash(S#state.net_type),
+			Tips = S#state.tips,
+
+			case Tips of
+				[ ] -> {reply, [GenesisBlockHash], S};
+				 _  ->
+				 	Tip = hd(Tips),
+					Tips1 = u:rotte_list_left1(Tips),
+				 	Advertise = exponentially_sampled_hashes(Tid, Tip, {A,P}),
+					{reply, Advertise, S#state{tips=Tips1}}
+			end
 	end;
 handle_call(get_floating_root_hashes, _From, S) ->
 	case S#state.tid_tree of
@@ -544,6 +564,32 @@ go_prev_loop(Acc, PrevHash, GoalHash, TidTree) ->
 indexes(TreeEntries) -> [Index || {_,Index,_,_} <- TreeEntries].
 
 
+%% sampling intervals = ceil(A * exp(n P)), n = 1,2,...
+exponentially_sampled_hashes(TidTree,
+	{_Height,{Hash,_Index,PrevHash,[]}}=_Tip, {A,P}) ->
+	
+	N = 2,
+	Gap = ceil(A*math:exp(N*P)),
+	exponential_sampling_loop([Hash], PrevHash, N, {A,P}, Gap, TidTree).
+
+exponential_sampling_loop(Acc, Hash, N, {A,P}, 1, TidTree) ->
+	case ets:lookup(TidTree,Hash) of
+		[] -> lists:reverse(Acc);
+		[{Hash,_Index,PrevHash,_NextHashes}] ->
+			N1 = N+1,
+			Gap = ceil(A*math:exp(N1*P)),
+			exponential_sampling_loop([Hash|Acc], PrevHash, N1, {A,P}, Gap,
+				TidTree)
+	end;
+exponential_sampling_loop(Acc, Hash, N, {A,P}, Gap, TidTree) ->
+	case ets:lookup(TidTree,Hash) of
+		[] -> lists:reverse(Acc);
+		[{Hash,_Index,PrevHash,_NextHashes}] ->
+			exponential_sampling_loop(Acc, PrevHash, N, {A,P}, Gap-1, TidTree)
+	end.
+
+
+
 
 -ifdef(EUNIT).
 
@@ -593,6 +639,16 @@ climb_tree_until_test() ->
 		[11,10,9,7,6,3,2,1],
 		indexes(go_down_tree_before(E11,0,TidTree))
 		).
+
+exponentially_sampled_hashes_test() ->
+	TidTree = ets:new(tree,[]),
+	[ets:insert_new(TidTree, {I,I,I-1,[I+1]}) || I <- lists:seq(1,99)],
+	TipEntry = {100,100,99,[]},
+	ets:insert_new(TidTree, TipEntry),
+	?assertEqual(
+		[100,99,98,96,94,92,90,88,86,84,82,80,77,74,71,68,65,61,57,53,48,43,
+			38,32,26,19,12,4],
+		exponentially_sampled_hashes(TidTree,{100,TipEntry},{0.75,0.08})).
 
 -endif.
 
