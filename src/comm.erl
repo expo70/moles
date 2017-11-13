@@ -229,7 +229,7 @@ handle_info(handshake_timeout, S) ->
 	stop(handshake_timeout, S).
 
 
-terminate(Reason, S) ->
+terminate(_Reason, S) ->
 	case S#state.socket of
 		undefined -> ok;
 		Socket ->
@@ -253,7 +253,8 @@ terminate(Reason, S) ->
 				false -> ok
 			end
 	end,
-	io:format("terminating at state = ~w~nReason = ~p~n",[S,Reason]).
+	%io:format("terminating at state = ~w~nReason = ~p~n",[S,Reason]).
+	ok.
 
 
 
@@ -377,7 +378,7 @@ process_pong(Payload, S) ->
 	Nonce = protocol:parse_pong(Payload),
 	io:format("Packet (pong) = ~p~n", [Nonce]),
 	
-	erlang:cencel_timer(S#state.timer_ref_ping_timeout),
+	erlang:cancel_timer(S#state.timer_ref_ping_timeout),
 	
 	S#state{timer_ref_ping_timeout=undefined}.
 

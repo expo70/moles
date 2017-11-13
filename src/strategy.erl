@@ -76,6 +76,8 @@ handle_cast({add_peer, IP_Address}, S) ->
 			case blockchain:collect_getheaders_hashes(MaxDepth) of
 				not_ready -> ok;
 				ListOfList ->
+					io:format("getheaders hashes were proposed: ~p~n",
+						[ListOfList]),
 					[jobs:add_job(
 					{IP_Address, {getheaders,Hashes}, 60}) 
 					|| Hashes <- ListOfList]

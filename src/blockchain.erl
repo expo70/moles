@@ -192,10 +192,10 @@ handle_call({get_proposed_headers, PeerTreeHashes, StopHash},
 %% * has a hash that does not exist in the current table
 %% * its hash satisfies its decleared difficulty (nBits)
 handle_cast({save_headers, HeadersPayload, Origin}, S) ->
-	Tid = S#state.tid_tree, %NOTE, meybe undefined
+	Tid = S#state.tid_tree, %NOTE, can be undefined headers are empty
 	HeadersFilePath = S#state.headers_file_path,
 
-	{_N_Headers, Rest} = protocol:read_var_int(HeadersPayload),
+	{N_Headers, Rest} = protocol:read_var_int(HeadersPayload),
 
 	%NOTE: the file is created if it does not exist.
 	{ok,F} = file:open(HeadersFilePath,[write,binary,append]),
@@ -206,6 +206,7 @@ handle_cast({save_headers, HeadersPayload, Origin}, S) ->
 
 	file:close(F),
 
+	io:format("saved ~w headers from ~w~n",[N_Headers,Origin]),
 	{noreply, S#state{new_entries=NewEntries1}}.
 
 
@@ -227,22 +228,29 @@ handle_info(update_tree, S) ->
 			report_errornous_entries(NewEntriesWithError)
 	end,
 
-	S1 = case NewEntriesNonError of
+	S2 = case NewEntriesNonError of
 		[ ] -> S;
 		 _  ->
 		 	case S#state.tid_tree of
 				undefined -> % do initialize
-					initialize_tree(NewEntriesNonError, S),
-					S#state{new_entries=[]};
+					S1 = initialize_tree(NewEntriesNonError, S),
+					S1#state{new_entries=[]};
 				_ ->
-					update_tree(NewEntriesNonError, S),
-					S#state{new_entries=[]}
+					S1 = update_tree(NewEntriesNonError, S),
+					S1#state{new_entries=[]}
 			end
 	end,
 
-	io:format("blockchain:update_tree finished.~n",[]),
+	io:format("blockchain:update_tree finished -~n",[]),
+	case S2#state.tid_tree of
+		undefined -> ok;
+		_ ->
+			io:format("~w tips, ~w leaves.~n",
+			[length(S2#state.tips), length(S2#state.leaves)])
+	end,
+
 	erlang:send_after(?TREE_UPDATE_INTERVAL, self(), update_tree),
-	{noreply, S1}.
+	{noreply, S2}.
 
 
 
@@ -266,6 +274,7 @@ initialize_tree(Entries, S) ->
 	Leaves = find_leaves(Tid),
 	Tips = find_tips(Tid, Leaves, GenesisBlockHash),
 
+	io:format("blockchain:initialize_tree finished.~n",[]),
 	S#state{tid_tree=Tid, roots=Roots, leaves=Leaves, tips=Tips}.
 
 
@@ -418,22 +427,24 @@ load_entries_from_file(S) ->
 
 	case u:file_existsQ(HeadersFilePath) of
 		true ->
+			io:format("reading ~s...~n",[HeadersFilePath]),
 			{ok,F} = file:open(HeadersFilePath, [read,binary]),
 			
 			NewEntries1 = read_header_chunk_loop(lists:reverse(NewEntries),F),
 			file:close(F),
 
-			io:format("~wnew entries were loaded.~n",[length(NewEntries1)]),
+			io:format("~w new entries were loaded.~n",[length(NewEntries1)]),
 			S#state{new_entries=NewEntries1};
 		false -> S
 	end.
+
 
 read_header_chunk_loop(Acc, F) ->
 	{ok,Position} = file:position(F, cur),
 
 	case file:read(F, ?HEADER_SIZE) of
 		{ok,Bin} ->
-			{{HashStr,PrevHashStr,_,_,_,_,_,0},<<>>} =
+			{{HashStr,_,PrevHashStr,_,_,_,_,0},<<>>} =
 			protocol:read_block_header(Bin),
 			Entry = {
 				protocol:hash(HashStr),

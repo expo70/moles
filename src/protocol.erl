@@ -105,6 +105,8 @@ parse_ping(<<Nonce:64/little>>) -> Nonce.
 pong(NetType, null) -> message(NetType, pong, <<>>);
 pong(NetType, Nonce) -> message(NetType, pong, <<Nonce:64/little>>).
 
+parse_pong(<<>>) -> null; % for older protocol versions
+parse_pong(<<Nonce:64/little>>) -> Nonce.
 
 
 
