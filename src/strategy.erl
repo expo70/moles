@@ -13,7 +13,7 @@
 	}).
 
 %% API
--export([start_link/1, add_peer/1, remove_peer/1, get_best_height/0, 
+-export([start_link/1, add_peer/1, remove_peer/1,
 	got_headers/2, got_getheaders/2, got_addr/2]).
 
 %% gen_server callbak
@@ -33,9 +33,6 @@ add_peer(IP_Address) ->
 
 remove_peer(PeerInfo) ->
 	gen_server:cast(?MODULE, {remove_peer, PeerInfo}).
-
-get_best_height() ->
-	gen_server:call(?MODULE, get_best_height).
 
 got_headers(Payload, Origin) ->
 	gen_server:cast(?MODULE, {got_headers, Payload, Origin}).
@@ -61,12 +58,12 @@ init([NetType]) ->
 		best_height = BestHeight
 	},
 	
-	erlang:send_after(?CHECK_N_PEERS_INTERVAL, self(), check_n_peers),
+	erlang:send_after(200, self(), check_n_peers),
 	{ok, InitialState}.
 
 
-handle_call(get_best_height, _From, S) ->
-	{reply, S#state.best_height, S}.
+handle_call(_Request, _From, S) ->
+	{reply, ok, S}.
 
 
 handle_cast({add_peer, IP_Address}, S) ->
@@ -110,8 +107,24 @@ handle_cast({got_getheaders, {_Version, HashStrs, StopHashStr}, Origin}, S) ->
 	{noreply, S};
 handle_cast({got_addr, NetAddrs, Origin}, S) ->
 	NetType = S#state.net_type,
+
+	% When using local regtest mode, bitcoind sometimes returns addr message
+	% that contains the host's global IP address. We convert it to the local
+	% IP address.
+	NetAddrs1 =
+	case NetType of
+		regtest ->
+			{ok,Global} = application:get_env(my_global_address),
+			{ok,Local } = application:get_env(my_local_address),
+			lists:filtermap(fun({Time, Services, IP_Address, Port}) ->
+				case IP_Address of
+					Global -> {true, {Time, Services, Local, Port}};
+					_ -> true
+				end end, NetAddrs);
+		_ -> NetAddrs
+	end,
 	
-	introduce_peers(NetAddrs),
+	introduce_peers(NetAddrs1),
 	JobSpecs = [
 		begin
 			% always found
@@ -130,7 +143,7 @@ handle_cast({got_addr, NetAddrs, Origin}, S) ->
 			end,
 			{addr, {AdvertisedTime, ServicesFlag, IP_Address, Port}}
 		end
-		|| {_,_,IP_Address,_} <- NetAddrs],
+		|| {_,_,IP_Address,_} <- NetAddrs1],
 	lists:foreach(fun(J) -> jobs:add_job({{except,Origin},J,60*10}) end,
 		JobSpecs),
 
@@ -154,10 +167,13 @@ handle_info(check_n_peers, S) ->
 %% Internal functions
 %% ----------------------------------------------------------------------------
 request_peer(S) ->
+	io:format("strategy: request_peer~n",[]),
 	NetType = S#state.net_type,
 
 	case peer_finder:request_peer(new) of
-		not_available -> ok;
+		not_available ->
+			io:format("not available~n",[]),
+			ok;
 		IP_Address ->
 			Port = 
 			case NetType of
@@ -166,7 +182,9 @@ request_peer(S) ->
 				regtest -> rules:default_port(NetType)+1;
 				_ -> rules:default_port(NetType)
 			end,
-			supervisor:add_comm(NetType, {outgoing, {IP_Address,Port}}) 
+			io:format("~w port=~w~n",[IP_Address,Port]),
+			Ret = comm_sup:add_comm(NetType, {outgoing, {IP_Address,Port}}),
+			io:format("returns ~p~n",[Ret])
 	end,
 	
 	erlang:send_after(?CHECK_N_PEERS_INTERVAL, self(), check_n_peers),

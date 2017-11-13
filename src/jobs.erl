@@ -51,9 +51,11 @@ init([]) ->
 handle_call({find_job, IP_Address}, _From, S) ->
 	Tid = S#state.tid_jobs,
 	
+	Job1 =
 	case ets:lookup(Tid, IP_Address) of
 		[Job|_T] ->
-			ets:delete_object(Job);
+			ets:delete_object(Job),
+			Job;
 		[] ->
 			case ets:lookup(Tid, all) of
 				[Job|_T] ->
@@ -61,26 +63,29 @@ handle_call({find_job, IP_Address}, _From, S) ->
 					case lists:member(IP_Address, Stamps) of
 						true ->
 							case ets:lookup(Tid, any) of
-								[Job|_T] ->
-									ets:delete_object(Job);
-								[] -> Job = not_available
+								[Job0|_T] ->
+									ets:delete_object(Job0),
+									Job0;
+								[] -> not_available
 							end;
 						false ->
 							ets:delete_object(Job),
 							UpdatedJob = {all, JobSpec, ExpirationTime,
 								[IP_Address|Stamps]},
-							ets:insert_new(Tid, UpdatedJob)
+							ets:insert_new(Tid, UpdatedJob),
+							Job
 					end;
 				[] ->
 					case ets:lookup(Tid, any) of
 						[Job|_T] ->
-							ets:delete_object(Job);
-						[] -> Job = not_available
+							ets:delete_object(Job),
+							Job;
+						[] -> not_available
 					end
 			end
 	end,
 
-	{reply, Job, S}.
+	{reply, Job1, S}.
 
 
 handle_cast({add_job, {{except, IP_Address},JobSpec,DurationInSec}}, S) ->

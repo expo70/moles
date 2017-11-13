@@ -18,7 +18,7 @@
 
 -behaviour(gen_server).
 
--export([start_link/1]).
+-export([start_link/2]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
@@ -63,7 +63,8 @@
 %%-----------------------------------------------------------------------------
 %% API
 %%-----------------------------------------------------------------------------
-start_link([_NetType, {_CommType, _CommTarget}]=Args) ->
+start_link(NetType, {CommType, CommTarget}) ->
+	Args = [NetType, {CommType, CommTarget}],
 	Opts = [],
 	%NOTE, we do not register the name
 	gen_server:start_link(?MODULE, Args, Opts).
@@ -93,15 +94,16 @@ start_link([_NetType, {_CommType, _CommTarget}]=Args) ->
 %%
 %% NOTE: don't use incoming socket in this function
 init([NetType, {CommType, CommTarget}]) ->
-	MyAddress =
+	io:format("comm:init~n",[]),
+	{ok, MyAddress} =
 	case NetType of
 		mainnet -> application:get_env(my_global_address);
 		testnet -> application:get_env(my_global_address);
 		regtest -> application:get_env(my_local_address)
 	end,
 	MyProtocolVersion = 70015, %latest version at this time
-	MyServices = protocol:services([node_witness]),
-	MyBestHeight = strategy:get_best_height(),
+	MyServices = [node_witness],
+	MyBestHeight = blockchain:get_best_height(),
 	StartTime = erlang:system_time(second),
 	TimerRef = erlang:send_after(?HANDSHAKE_TIMEOUT,self(),handshake_timeout),
 
@@ -110,7 +112,7 @@ init([NetType, {CommType, CommTarget}]) ->
 		peer_address={0,0,0,0},
 		peer_port=0,
 		peer_protocol_version=0,
-		peer_services=0,
+		peer_services=[],
 		peer_readyQ=false,
 		my_address=MyAddress,
 		my_port=0,
@@ -135,7 +137,8 @@ init([NetType, {CommType, CommTarget}]) ->
 				CommTarget, InitialState})
 	end,
 
-	{ok, not_initialized_yet}.
+	%{ok, not_initialized_yet}.
+	{ok, InitialState}.
 
 
 handle_call(_Request, _From, S) ->
@@ -157,23 +160,27 @@ handle_cast({assync_init_outgoing, {PeerAddress, PeerPort}, S}, _S) ->
 	case gen_tcp:connect(PeerAddress, PeerPort,
 		[binary, {packet,0}, {active, false}]) of
 		{ok, Socket} ->
-			{_MyAddress, MyPort} = inet:sockname(Socket),
-			S1 = S#state{ socket=Socket, my_port=MyPort },
+			{ok, {_MyAddress, MyPort}} = inet:sockname(Socket),
+			S1 = S#state{ socket=Socket, comm_type=outgoing,
+				peer_address=PeerAddress, peer_port=PeerPort,
+				my_port=MyPort },
 			S2 = send_first_version_message(S1),
 			{noreply, S2};
 		{error, Reason} ->
 			stop({connect_failed, Reason}, S)
 	end;
 handle_cast({assync_init_incoming, Socket, S}, _S) ->
-	{PeerAddress, PeerPort} = inet:peername(Socket),
+	{ok, {PeerAddress, PeerPort}} = inet:peername(Socket),
+	{ok, {_MyAddress, MyPort}} = inet:sockname(Socket),
 	io:format("connection from ~p:~p...~n",[PeerAddress, PeerPort]),
 
 	ok = acceptor:request_control(Socket, self()),
 
 	inet:setopts(Socket, [{active, once}]),
 
-	{noreply, S#state{socket=Socket, 
-		peer_address=PeerAddress, peer_port=PeerPort}}.
+	{noreply, S#state{socket=Socket, comm_type=incoming,
+		peer_address=PeerAddress, peer_port=PeerPort,
+		my_port=MyPort}}.
 
 
 %% TCP related messages
@@ -515,11 +522,13 @@ do_job({_Target, JobSpec, _ExpirationTime, _Stamps}, S) ->
 
 	case JobSpec of
 		{getheaders, Hashes} ->
+			io:format("comm:job getheaders~n",[]),
 			HashStrs = [protocol:parse_hash(H) || H <- Hashes],
 			Message = protocol:getheaders(NetType,HashStrs,?HASH256_ZERO_STR),
 			S1 = send(Socket, Message, S),
 			S1;
 		{headers, Payload} ->
+			io:format("comm:job headers~n",[]),
 			Message = protocol:message(NetType,headers,Payload),
 			S1 = send(Socket, Message, S),
 			S1;

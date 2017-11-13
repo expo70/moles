@@ -143,7 +143,7 @@ handle_call(get_floating_root_hashes, _From, S) ->
 	end;
 handle_call(get_best_height, _From, S) ->
 	case S#state.tid_tree of
-		undefined -> {reply, not_ready, S};
+		undefined -> {reply, 0, S};
 		_Tid ->
 			case S#state.tips of
 				[] -> {reply, 0, S};

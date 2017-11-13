@@ -20,7 +20,7 @@ start_link() ->
 
 add_comm(NetType, {CommType, CommTarget}) ->
 	% Children are started by 
-	% comm:start_link([]+[NetType, {CommType, CommTarget}]).
+	% apply(comm, start_link, []+[NetType, {CommType, CommTarget}]).
 	supervisor:start_child(?MODULE, [NetType, {CommType, CommTarget}]).
 
 

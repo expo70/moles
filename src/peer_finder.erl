@@ -91,7 +91,7 @@ handle_call({request_peer, new=_Priority}, _From, S) ->
 	TidPeersUsed = S#state.tid_peers_used,
 
 	%FIXME, now only supports Priority = new
-	Matches = ets:match(Tid, {'$1','_','_',{new,'_'},'_','_','_'}),
+	Matches = ets:match(Tid, {'$1','_','_','_',{new,'_'},'_','_','_'}),
 	IPs = [IP || [IP] <- Matches, not ets:member(TidPeersUsed, IP)],
 
 	case IPs of
@@ -135,7 +135,7 @@ handle_cast({update_peer,{IP_Address, UserAgent, ServicesFlag, BestHeight,
 	Tid = S#state.tid_peers,
 
 	case ets:lookup(Tid, IP_Address) of
-		[] -> ets:insert_new(PeerInfo);
+		[] -> ets:insert_new(Tid, PeerInfo);
 		[{IP_Address, _, _, _, _,
 			OldTotalUseDuration, OldTotalInBytes, OldTotalOutBytes}] ->
 			%FIXME, avoid summing totals again
@@ -164,7 +164,7 @@ handle_cast({register_peer, {IP_Address,_,_,_,_,_,_,_}=PeerInfo}, S) ->
 	Tid = S#state.tid_peers,
 
 	case ets:lookup(Tid, IP_Address) of
-		[ ] -> ets:insert_new(PeerInfo);
+		[ ] -> ets:insert_new(Tid, PeerInfo);
 		 _  -> ok
 	end,
 	
@@ -197,12 +197,12 @@ ns_lookup(Name, Class, Type) ->
 	end.
 
 
-add_new_peer(IP_Address, {new, Time}, Tid) ->
+add_new_peer(IP_Address, TimeSpec, Tid) ->
 	NewEntry = {IP_Address,
 		undefined,
 		undefined,
 		undefined,
-		{new, Time},
+		TimeSpec,
 		0,0,0},
 
 	case ets:lookup(Tid, IP_Address) of
