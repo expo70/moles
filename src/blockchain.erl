@@ -91,7 +91,7 @@ init([NetType]) ->
 			new_entries = []
 		},
 	
-	InitialState1 = load_headers_from_file(InitialState),
+	InitialState1 = load_entries_from_file(InitialState),
 	% blocking
 	{_, InitialState2} = handle_info(update_tree, InitialState1),
 	%erlang:send_after(?TREE_UPDATE_INTERVAL, self(), update_tree),
@@ -136,9 +136,9 @@ handle_call({get_proposed_headers, PeerTreeHashes, StopHash},
 	Tips = S#state.tips,
 
 	case Tips of
-		[ ] -> {reply, [], S};
+		[ ] -> {reply, <<>>, S};
 		 _  ->
-		 	Hashes =
+		 	Entries =
 		 	case find_first_common_entry(PeerTreeHashes, Tid) of
 				not_found ->
 					{_H, TipEntry} = hd(Tips),
@@ -150,15 +150,18 @@ handle_call({get_proposed_headers, PeerTreeHashes, StopHash},
 					{_H, TipEntry} = hd(Tips),
 					climb_tree_until(Entry, TipEntry, Tid)
 			end,
-			Hashes1 = lists:sublist(Hashes,rules:max_headers_counts()),
-			Hashes2 =
+			Entries1 = lists:sublist(Entries,rules:max_headers_counts()),
+			Entries2 =
 			case StopHash of
-				?HASH256_ZERO_BIN -> Hashes1;
-				_ -> u:take_until(StopHash, Hashes1)
+				?HASH256_ZERO_BIN -> Entries1;
+				_ -> u:take_until(fun({Hash,_,_,_})-> Hash=:=StopHash end,
+					Entries1)
 			end,
+
+			HeadersPayload = load_headers_from_file(indexes(Entries2), S),
 			
 			Tips1 = u:list_rotate_left1(Tips),
-			{reply, Hashes2, S#state{tips=Tips1}}
+			{reply, HeadersPayload, S#state{tips=Tips1}}
 	end.
 
 
@@ -169,6 +172,9 @@ handle_call({get_proposed_headers, PeerTreeHashes, StopHash},
 handle_cast({save_headers, HeadersPayload, Origin}, S) ->
 	Tid = S#state.tid_tree,
 	HeadersFilePath = S#state.headers_file_path,
+
+	{_N_Headers, Rest} = protocol:parse_var_int(HeadersPayload),
+
 	%NOTE: the file is created if it does not exist.
 	{ok,F} = file:open(HeadersFilePath,[write,binary,append]),
 
@@ -192,8 +198,8 @@ handle_cast({save_headers, HeadersPayload, Origin}, S) ->
 	end,
 
 	NewEntries  = list:reverse(S#state.new_entries),
-	NewEntries1 = for_each_header_chunk_from_payload(NewEntries,
-		SaveFunc, HeadersPayload, Origin),
+	NewEntries1 = for_each_header_chunk_from_bin(NewEntries,
+		SaveFunc, Rest, Origin),
 	file:close(F),
 
 	{noreply, S#state{new_entries=NewEntries1}}.
@@ -409,13 +415,13 @@ remove_entry_from_the_tree({Hash,_,PrevHash,NextHashes}=Entry, S) ->
 	S#state{roots=Roots2, leaves=Leaves2, tips=Tips}.
 
 
-load_headers_from_file(S) ->
+load_entries_from_file(S) ->
 	HeadersFilePath = S#state.headers_file_path,
 	NewEntries = S#state.new_entries,
 
 	case u:file_existsQ(HeadersFilePath) of
 		true ->
-			{ok,F} = file:read_file(HeadersFilePath),
+			{ok,F} = file:open(HeadersFilePath, [read,binary]),
 			
 			NewEntries1 = read_header_chunk_loop(lists:reverse(NewEntries),F),
 			file:close(F),
@@ -426,7 +432,7 @@ load_headers_from_file(S) ->
 	end.
 
 read_header_chunk_loop(Acc, F) ->
-	{ok,Position} = file:possition(F, cur),
+	{ok,Position} = file:position(F, cur),
 
 	case file:read(F, ?HEADER_SIZE) of
 		{ok,Bin} ->
@@ -442,10 +448,28 @@ read_header_chunk_loop(Acc, F) ->
 	end.
 
 
-for_each_header_chunk_from_payload(Acc, _, <<>>, _) -> lists:reverse(Acc);
-for_each_header_chunk_from_payload(Acc, ProcessHeaderFunc,
-	HeadersPayload, Origin) ->
-	<<HeaderBin:?HEADER_SIZE/binary, Rest/binary>> = HeadersPayload,
+load_headers_from_file(Indexes, S) ->
+	HeadersFilePath = S#state.headers_file_path,
+	
+	{ok,F} = file:open(HeadersFilePath, [read, binary]),
+	Payload = lists:foldl(fun(P,AccIn)->
+		begin
+			{ok,P} = file:position(F,P),
+			{ok,Bin} = file:read(F,?HEADER_SIZE),
+			<<AccIn/binary,Bin/binary>>
+		end
+		end,
+		protocol:var_int(length(Indexes)), % AccIn0
+		[Position || {headers,Position} <- Indexes]),
+	file:close(F),
+
+	Payload.
+
+
+for_each_header_chunk_from_bin(Acc, _, <<>>, _) -> lists:reverse(Acc);
+for_each_header_chunk_from_bin(Acc, ProcessHeaderFunc,
+	Bin, Origin) ->
+	<<HeaderBin:?HEADER_SIZE/binary, Rest/binary>> = Bin,
 	
 	Result =
 	try ProcessHeaderFunc(HeaderBin) of
@@ -454,7 +478,7 @@ for_each_header_chunk_from_payload(Acc, ProcessHeaderFunc,
 		Class:Reason -> {{Class,Reason}, Origin, HeaderBin}
 	end,
 	
-	for_each_header_chunk_from_payload([Result|Acc],
+	for_each_header_chunk_from_bin([Result|Acc],
 		ProcessHeaderFunc, Rest, Origin).
 
 
@@ -518,6 +542,7 @@ go_prev_loop(Acc, PrevHash, GoalHash, TidTree) ->
 
 
 indexes(TreeEntries) -> [Index || {_,Index,_,_} <- TreeEntries].
+
 
 
 -ifdef(EUNIT).

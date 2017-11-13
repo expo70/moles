@@ -126,6 +126,13 @@ list_rotate_left1([]) -> [];
 list_rotate_left1([H|T]) -> T++[H].
 
 
+take_until(Pred, List) when is_function(Pred) ->
+	Len = length(List),
+	Before = lists:takewhile(Pred, List),
+	case length(Before) of
+		Len -> List;
+		_ -> Before ++ [lists:nth(length(Before)+1, List)]
+	end;
 take_until(Elem, List) ->
 	case lists:member(Elem, List) of
 		false -> List;

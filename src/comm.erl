@@ -510,10 +510,19 @@ on_handshake(S) ->
 
 
 do_job({_Target, JobSpec, _ExpirationTime, _Stamps}, S) ->
+	Socket = S#state.socket,
+	NetType = S#state.net_type,
+
 	case JobSpec of
 		{getheaders, Hashes} ->
-			
-			S;
+			HashStrs = [protocol:parse_hash(H) || H <- Hashes],
+			Message = protocol:getheaders(NetType,HashStrs,?HASH256_ZERO_STR),
+			S1 = send(Socket, Message, S),
+			S1;
+		{headers, Payload} ->
+			Message = protocol:message(NetType,headers,Payload),
+			S1 = send(Socket, Message, S),
+			S1;
 		Unknown ->
 			io:format("Unknown job spec detected: ~w~n",[Unknown]),
 			S

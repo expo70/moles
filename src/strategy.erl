@@ -100,11 +100,13 @@ handle_cast({got_headers, Payload, Origin}, S) ->
 handle_cast({got_getheaders, {_Version, HashStrs, StopHashStr}, Origin}, S) ->
 	PeerTreeHashes = [protocol:hash(H) || H <- HashStrs],
 	StopHash = protocol:hash(StopHashStr),
-	MyHashes = blockchain:get_proposed_headers_hashes(PeerTreeHashes, 
+	Payload = blockchain:get_proposed_headers(PeerTreeHashes, 
 		StopHash),
 	
-	%jobs:add_job(Origin, {headers, }, 60),
-	
+	case Payload of
+		<<>> -> ok;
+		_ -> jobs:add_job(Origin, {headers, Payload}, 60)
+	end,
 	{noreply, S};
 handle_cast({got_addr, NetAddrs, Origin}, S) ->
 	NetType = S#state.net_type,
