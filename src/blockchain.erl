@@ -103,10 +103,12 @@ init([NetType]) ->
 
 
 handle_call({collect_getheaders_hashes, MaxDepth}, _From, S) ->
+	GenesisBlockHash = rules:genesis_block_hash(S#state.net_type),
+	
 	case S#state.tid_tree of
-		undefined -> {reply, not_ready, S};
+		undefined -> %{reply, not_ready, S};
+			{reply, [[GenesisBlockHash]], S};
 		Tid ->
-			GenesisBlockHash = rules:genesis_block_hash(S#state.net_type),
 			Tips = S#state.tips,
 
 			Advertise =
@@ -256,6 +258,7 @@ handle_info(update_tree, S) ->
 			end
 	end,
 
+	io:format("blockchain:update_tree finished.~n",[]),
 	erlang:send_after(?TREE_UPDATE_INTERVAL, self(), update_tree),
 	{noreply, S1}.
 

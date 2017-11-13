@@ -188,9 +188,10 @@ handle_cast({assync_init_incoming, Socket, S}, _S) ->
 handle_info({tcp, Socket, Packet}, S) ->
 	Rest = S#state.buf,
 	InBytes = S#state.in_bytes + byte_size(Packet),
-	get_command(S#state{buf = <<Rest/binary,Packet/binary>>, in_bytes=InBytes}),
+	S1 = get_command(S#state{buf = <<Rest/binary,Packet/binary>>, 
+		in_bytes=InBytes}),
 	inet:setopts(Socket, [{active, once}]),
-	{noreply, S};
+	{noreply, S1};
 handle_info({tcp_closed, _Socket}, S) ->
 	stop(tcp_closed, S);
 handle_info({tcp_error, _Socket, Reason}, S) ->
@@ -203,13 +204,15 @@ handle_info(find_job, S) ->
 			do_job(Job, S)
 	end,
 
+	io:format("comm:find_job finished.~n",[]),
 	TimerRefFindJob = erlang:send_after(?FIND_JOB_INTERVAL, self(), find_job),
 	{noreply, S1#state{timer_ref_find_job=TimerRefFindJob}};
 handle_info(ping, S) ->
+	NetType = S#state.net_type,
 	S1 =
 	case S#state.timer_ref_ping_timeout of
 		undefined ->
-			Message = protocol:ping(),
+			Message = protocol:ping(NetType),
 			S0 = send(S#state.socket, Message, S),
 			TimerRefPingTimeout =
 				erlang:send_after(?PING_TIMEOUT, self(), ping_timeout),
@@ -217,6 +220,7 @@ handle_info(ping, S) ->
 		_ -> S % ping has been sent; do nothing
 	end,
 
+	io:format("comm:ping finished.~n",[]),
 	TimerRefPing = erlang:send_after(?PING_INTERVAL, self(), ping),
 	{noreply, S1#state{timer_ref_ping=TimerRefPing}};
 handle_info(ping_timeout, S) ->
@@ -436,14 +440,16 @@ process_unknown_message(Unknown, Payload, S) ->
 %% returns NewState
 %% 
 get_command(S) ->
+	io:format("comm:get_command~n",[]),
 	cancel_timer_if_not_undefined(S#state.timer_ref_find_job),
 	TimerRefFindJob = erlang:send_after(?FIND_JOB_INTERVAL, self(), find_job),
 	cancel_timer_if_not_undefined(S#state.timer_ref_ping),
 	TimerRefPing = erlang:send_after(?PING_INTERVAL, self(), ping),
 	
 	Packet = S#state.buf,
+	Read = protocol:read_message(Packet),
 	S1 =
-	case protocol:read_message(Packet) of
+	case Read of
 		{ok, {_NetType, Command, Payload, Rest}} ->
 			case Command of
 				version ->
@@ -481,16 +487,24 @@ get_command(S) ->
 		{error, checksum, {_NetType, Rest}}->
 			exit(checksum);
 		{error, incomplete, Rest}->
+			io:format("comm:get_command - incomplete (~w), len=~w~n",
+				[Rest, byte_size(Rest)]),
 			S
 	end,
+	
 	NewState = S1#state{buf=Rest,
 		timer_ref_ping=TimerRefPing,
 		timer_ref_find_job=TimerRefFindJob},
-	if
-		Rest =/= <<>> -> get_command(NewState);
-		Rest =:= <<>> ->
-			% wait for the next packet
-			NewState
+	
+	case Read of
+		{error, incomplete, _} -> NewState;
+		_ ->
+			if
+				Rest =/= <<>> -> get_command(NewState);
+				Rest =:= <<>> ->
+				% wait for the next packet
+				NewState
+			end
 	end.
 
 

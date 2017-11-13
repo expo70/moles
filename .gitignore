@@ -21,3 +21,4 @@ test-blocks
 test-txs
 test-data
 tester-data
+regtest

@@ -187,6 +187,7 @@ request_peer(S) ->
 			io:format("returns ~p~n",[Ret])
 	end,
 	
+	io:format("strategy:check_peer finished.~n",[]),
 	erlang:send_after(?CHECK_N_PEERS_INTERVAL, self(), check_n_peers),
 	{noreply, S}.
 

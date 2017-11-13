@@ -54,7 +54,7 @@ handle_call({find_job, IP_Address}, _From, S) ->
 	Job1 =
 	case ets:lookup(Tid, IP_Address) of
 		[Job|_T] ->
-			ets:delete_object(Job),
+			ets:delete_object(Tid, Job),
 			Job;
 		[] ->
 			case ets:lookup(Tid, all) of
@@ -64,12 +64,12 @@ handle_call({find_job, IP_Address}, _From, S) ->
 						true ->
 							case ets:lookup(Tid, any) of
 								[Job0|_T] ->
-									ets:delete_object(Job0),
+									ets:delete_object(Tid, Job0),
 									Job0;
 								[] -> not_available
 							end;
 						false ->
-							ets:delete_object(Job),
+							ets:delete_object(Tid, Job),
 							UpdatedJob = {all, JobSpec, ExpirationTime,
 								[IP_Address|Stamps]},
 							ets:insert_new(Tid, UpdatedJob),
@@ -78,7 +78,7 @@ handle_call({find_job, IP_Address}, _From, S) ->
 				[] ->
 					case ets:lookup(Tid, any) of
 						[Job|_T] ->
-							ets:delete_object(Job),
+							ets:delete_object(Tid, Job),
 							Job;
 						[] -> not_available
 					end
