@@ -28,7 +28,7 @@ add_comm(NetType, {CommType, CommTarget}) ->
 %% supervisor callback
 %% ----------------------------------------------------------------------------
 init([]) ->
-	SupFlags = #{stragety => simple_one_for_one
+	SupFlags = #{strategy => simple_one_for_one
 		%intensity =>,
 		%period =>
 		},

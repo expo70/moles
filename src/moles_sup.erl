@@ -13,7 +13,7 @@ start_link(NetType) ->
 
 
 init([NetType]) ->
-	SupFlags = #{stragegy => one_for_one},
+	SupFlags = #{strategy => one_for_one},
 
 	ChildSpec1 = #{id => blockchain,
 		start => {blockchain, start_link, [NetType]},

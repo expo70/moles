@@ -6,7 +6,7 @@
 
 
 start(_StartType, KeyMod) ->
-	NetType = KeyMod,
+	[NetType] = KeyMod,
 	moles_sup:start_link(NetType).
 
 stop(_S) ->
