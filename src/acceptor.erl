@@ -89,7 +89,8 @@ handle_info(_Info, S) ->
 %% Internal functions
 %%-----------------------------------------------------------------------------
 start_child_acceptor(ListenSocket) ->
-	_Pid = spawn_link(fun() -> accept_once(self(), ListenSocket) end).
+	MyPid = self(),
+	_Pid = spawn_link(fun() -> accept_once(MyPid, ListenSocket) end).
 
 
 % child process
@@ -97,7 +98,7 @@ accept_once(ParentPid, ListenSocket) ->
 	% blocking
 	case gen_tcp:accept(ListenSocket) of
 		{ok, Socket} ->
-			gen_tcp:controlling_process(ParentPid),
+			ok = gen_tcp:controlling_process(Socket, ParentPid),
 			gen_server:cast(?MODULE, {accept, Socket});
 		{error, Reason} ->
 			io:format("gen_tcp:accept() failed: Reason = ~w~n", [Reason]),

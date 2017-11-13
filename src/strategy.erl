@@ -58,7 +58,7 @@ init([NetType]) ->
 		best_height = BestHeight
 	},
 	
-	erlang:send_after(200, self(), check_n_peers),
+	%erlang:send_after(200, self(), check_n_peers), % start accessing peers
 	{ok, InitialState}.
 
 
@@ -186,7 +186,7 @@ request_peer(S) ->
 			end,
 			io:format("~w port=~w~n",[IP_Address,Port]),
 			Ret = comm_sup:add_comm(NetType, {outgoing, {IP_Address,Port}}),
-			io:format("returns ~p~n",[Ret])
+			io:format("comm_sup:add_comm returns ~p~n",[Ret])
 	end,
 	
 	io:format("strategy:check_peer finished.~n",[]),

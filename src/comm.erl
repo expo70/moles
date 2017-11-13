@@ -124,7 +124,7 @@ init([NetType, {CommType, CommTarget}]) ->
 		timer_ref_handshake_timeout=TimerRef,
 		in_bytes =0,
 		out_bytes=0,
-		buf=[]
+		buf= <<>>
 	},
 	
 	%% asynchronous init
@@ -170,11 +170,11 @@ handle_cast({assync_init_outgoing, {PeerAddress, PeerPort}, S}, _S) ->
 			stop({connect_failed, Reason}, S)
 	end;
 handle_cast({assync_init_incoming, Socket, S}, _S) ->
+	ok = acceptor:request_control(Socket, self()),
+
 	{ok, {PeerAddress, PeerPort}} = inet:peername(Socket),
 	{ok, {_MyAddress, MyPort}} = inet:sockname(Socket),
 	io:format("connection from ~p:~p...~n",[PeerAddress, PeerPort]),
-
-	ok = acceptor:request_control(Socket, self()),
 
 	inet:setopts(Socket, [{active, once}]),
 
