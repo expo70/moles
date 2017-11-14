@@ -192,14 +192,18 @@ handle_info({tcp, Socket, Packet}, S) ->
 		in_bytes=InBytes}),
 	inet:setopts(Socket, [{active, once}]),
 	{noreply, S1};
+
 handle_info({tcp_closed, _Socket}, S) ->
 	stop(tcp_closed, S);
+
 handle_info({tcp_error, _Socket, Reason}, S) ->
 	stop({tcp_error, Reason}, S);
+
 handle_info(find_job, S) ->
 	S1 =
 	case jobs:find_job(S#state.peer_address) of
-		not_available -> S;
+		not_available ->
+			S;
 		Job ->
 			do_job(Job, S)
 	end,
@@ -207,6 +211,7 @@ handle_info(find_job, S) ->
 	io:format("comm:find_job finished.~n",[]),
 	TimerRefFindJob = erlang:send_after(?FIND_JOB_INTERVAL, self(), find_job),
 	{noreply, S1#state{timer_ref_find_job=TimerRefFindJob}};
+
 handle_info(ping, S) ->
 	NetType = S#state.net_type,
 	S1 =
@@ -223,8 +228,10 @@ handle_info(ping, S) ->
 	io:format("comm:ping finished.~n",[]),
 	TimerRefPing = erlang:send_after(?PING_INTERVAL, self(), ping),
 	{noreply, S1#state{timer_ref_ping=TimerRefPing}};
+
 handle_info(ping_timeout, S) ->
 	stop(ping_timeout, S);
+
 handle_info(handshake_timeout, S) ->
 	stop(handshake_timeout, S).
 
@@ -237,19 +244,7 @@ terminate(_Reason, S) ->
 			ok = gen_tcp:close(Socket),
 			case handshakeQ(S) of
 				true ->
-					EndTime = erlang:system_time(second),
-					Duration = S#state.start_time - EndTime,
-					PeerInfo = {S#state.peer_address,
-						S#state.peer_user_agent,
-						S#state.peer_services,
-						S#state.peer_start_height,
-						EndTime,
-						Duration,
-						S#state.in_bytes,
-						S#state.out_bytes
-						},
-
-					strategy:remove_peer(PeerInfo);
+					strategy:remove_peer();
 				false -> ok
 			end
 	end,
@@ -529,6 +524,21 @@ handshakeQ(S) -> S#state.peer_readyQ andalso S#state.my_readyQ.
 on_handshake(S) ->
 	erlang:cancel_timer(S#state.timer_ref_handshake_timeout),
 	strategy:add_peer(S#state.peer_address).
+
+
+current_peer_info(S) ->
+	EndTime = erlang:system_time(second),
+	Duration = S#state.start_time - EndTime,
+	PeerInfo = {S#state.peer_address,
+		S#state.peer_user_agent,
+		S#state.peer_services,
+		S#state.peer_start_height,
+		EndTime,
+		Duration,
+		S#state.in_bytes,
+		S#state.out_bytes
+	},
+	PeerInfo.
 
 
 do_job({_Target, JobSpec, _ExpirationTime, _Stamps}, S) ->

@@ -13,7 +13,7 @@
 	}).
 
 %% API
--export([start_link/1, add_peer/1, remove_peer/1,
+-export([start_link/1, add_peer/1, remove_peer/0, update_peer/1,
 	got_headers/2, got_getheaders/2, got_addr/2]).
 
 %% gen_server callbak
@@ -31,8 +31,11 @@ start_link(NetType) ->
 add_peer(IP_Address) ->
 	gen_server:cast(?MODULE, {add_peer, IP_Address}).
 
-remove_peer(PeerInfo) ->
-	gen_server:cast(?MODULE, {remove_peer, PeerInfo}).
+remove_peer() ->
+	gen_server:cast(?MODULE, remove_peer).
+
+update_peer(PeerInfo) ->
+	gen_server:cast(?MODULE, {update_peer, PeerInfo}).
 
 got_headers(Payload, Origin) ->
 	gen_server:cast(?MODULE, {got_headers, Payload, Origin}).
@@ -86,16 +89,21 @@ handle_cast({add_peer, IP_Address}, S) ->
 	
 	peer_finder:new_peer(IP_Address),
 	{noreply, S#state{n_peers=N_Peers+1}};
-handle_cast({remove_peer, PeerInfo}, S) ->
-	N_Peers = S#state.n_peers,
 
-	peer_finder:update_peer(PeerInfo),
+handle_cast(remove_peer, S) ->
+	N_Peers = S#state.n_peers,
 	{noreply, S#state{n_peers=N_Peers-1}};
+
+handle_cast({update_peer, PeerInfo}, S) ->
+	peer_finder:update_peer(PeerInfo),
+	{noreply, S};
+
 handle_cast({got_headers, Payload, Origin}, S) ->
 	
 	blockchain:save_headers(Payload, Origin),
 
 	{noreply, S};
+
 handle_cast({got_getheaders, {_Version, HashStrs, StopHashStr}, Origin}, S) ->
 	PeerTreeHashes = [protocol:hash(H) || H <- HashStrs],
 	StopHash = protocol:hash(StopHashStr),
@@ -107,6 +115,7 @@ handle_cast({got_getheaders, {_Version, HashStrs, StopHashStr}, Origin}, S) ->
 		_ -> jobs:add_job(Origin, {headers, Payload}, 60)
 	end,
 	{noreply, S};
+
 handle_cast({got_addr, NetAddrs, Origin}, S) ->
 	NetType = S#state.net_type,
 

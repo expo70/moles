@@ -22,7 +22,7 @@
 	save_headers/2,
 	collect_getheaders_hashes/1,
 	collect_getheaders_hashes_exponential/1,
-	get_floating_root_hashes/0,
+	get_floating_root_prevhashes/0,
 	get_best_height/0,
 	get_proposed_headers/2
 	]).
@@ -63,8 +63,8 @@ collect_getheaders_hashes(MaxDepth) ->
 collect_getheaders_hashes_exponential({A,P}) ->
 	gen_server:call(?MODULE, {collect_getheaders_hashes_exponential, {A,P}}).
 
-get_floating_root_hashes() ->
-	gen_server:call(?MODULE, get_floating_root_hashes).
+get_floating_root_prevhashes() ->
+	gen_server:call(?MODULE, get_floating_root_prevhashes).
 
 get_best_height() ->
 	gen_server:call(?MODULE, get_best_height).
@@ -134,13 +134,13 @@ handle_call({collect_getheaders_hashes_exponential, {A,P}}, _From, S) ->
 					{reply, Advertise, S#state{tips=Tips1}}
 			end
 	end;
-handle_call(get_floating_root_hashes, _From, S) ->
+handle_call(get_floating_root_prevhashes, _From, S) ->
 	case S#state.tid_tree of
 		undefined -> {reply, not_ready, S};
 		_Tid ->
 			Roots = S#state.roots,
 			GenesisBlockHash = rules:genesis_block_hash(S#state.net_type),
-			[Hash || {Hash,_,PrevHash,_} <- Roots,
+			[PrevHash || {_,_,PrevHash,_} <- Roots,
 				PrevHash =/= GenesisBlockHash]
 	end;
 handle_call(get_best_height, _From, S) ->
@@ -245,8 +245,15 @@ handle_info(update_tree, S) ->
 	case S2#state.tid_tree of
 		undefined -> ok;
 		_ ->
-			io:format("~w tips, ~w leaves.~n",
-			[length(S2#state.tips), length(S2#state.leaves)])
+			Tips = S2#state.tips,
+			io:format("\t~w tips, ~w leaves, ~w roots.~n",
+			[length(Tips), length(S2#state.leaves), length(S2#state.roots)]),
+			if
+				length(Tips) >= 1 ->
+					{Height,_} = hd(Tips),
+					io:format("\tbest height = ~w.~n", [Height]);
+				true -> ok
+			end
 	end,
 
 	erlang:send_after(?TREE_UPDATE_INTERVAL, self(), update_tree),

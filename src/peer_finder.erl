@@ -10,7 +10,7 @@
 	request_peer/1, update_peer/1, new_peer/1, register_peer/1, find_peer/1]).
 
 % gen_server callbacks
--export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
+-export([init/1, handle_call/3, handle_cast/2, handle_info/2]).
 
 
 -record(state,{
@@ -54,7 +54,6 @@ register_peer(PeerInfo) ->
 %% gen_server callbaks
 %% ----------------------------------------------------------------------------
 init([NetType]) ->
-
 	PeersFileDir =
 	case NetType of
 		mainnet  -> "./mainnet/peers";
@@ -146,7 +145,8 @@ handle_cast({update_peer,{IP_Address, UserAgent, ServicesFlag, BestHeight,
 				OldTotalOutBytes + TotalOutBytes})
 	end,
 	
-	{noreply, S};
+	S1 = save_peers(S),
+	{noreply, S1};
 handle_cast({new_peer, IP_Address},S) ->
 	Tid = S#state.tid_peers,
 	TidPeersUsed = S#state.tid_peers_used,
@@ -174,12 +174,6 @@ handle_cast({register_peer, {IP_Address,_,_,_,_,_,_,_}=PeerInfo}, S) ->
 handle_info(_Info, S) ->
 	{noreply, S}.
 
-
-terminate(_Reason, S) ->
-	Tid = S#state.tid_peers,
-	PeersFilePath = S#state.peers_file_path,
-
-	ets:tab2file(Tid, PeersFilePath).
 
 
 %% ----------------------------------------------------------------------------
@@ -213,6 +207,15 @@ add_new_peer(IP_Address, TimeSpec, Tid) ->
 		[_Entry] ->
 			ok
 	end.
+
+
+save_peers(S) ->
+	Tid = S#state.tid_peers,
+	PeersFilePath = S#state.peers_file_path,
+
+	io:format("peers data saving ...~n",[]),
+	ok = ets:tab2file(Tid, PeersFilePath),
+	S.
 
 
 dns_servers(testnet) -> [
