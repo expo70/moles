@@ -116,7 +116,7 @@ handle_call({collect_getheaders_hashes, MaxDepth}, _From, S) ->
 	
 	case S#state.tid_tree of
 		undefined -> %{reply, not_ready, S};
-			{reply, [[GenesisBlockHash]], S};
+			{reply, [[GenesisBlockHash]], S}; % required for startup
 		Tid ->
 			Tips = S#state.tips,
 
@@ -128,10 +128,12 @@ handle_call({collect_getheaders_hashes, MaxDepth}, _From, S) ->
 			{reply, Advertise, S}
 	end;
 handle_call({collect_getheaders_hashes_exponential, {A,P}}, _From, S) ->
+	GenesisBlockHash = rules:genesis_block_hash(S#state.net_type),
+
 	case S#state.tid_tree of
-		undefined -> {reply, not_ready, S};
+		undefined -> %{reply, not_ready, S};
+			{reply, [[GenesisBlockHash]], S}; % required for startup
 		Tid ->
-			GenesisBlockHash = rules:genesis_block_hash(S#state.net_type),
 			Tips = S#state.tips,
 
 			case Tips of
