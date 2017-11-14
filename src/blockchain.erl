@@ -279,9 +279,9 @@ initialize_tree(Entries, S) ->
 
 
 % floating (non-connected) entry is added into AccIn
-try_to_connect_floating_root(Tid, {Hash,_,PrevHash,_}=_Entry, AccIn) ->
+try_to_connect_floating_root(Tid, {Hash,_,PrevHash,_}=Entry, AccIn) ->
 	case ets:lookup(Tid, PrevHash) of
-		[] -> [Hash|AccIn];
+		[] -> [Entry|AccIn];
 		[{PrevHash, Index, PrevPrevHash, PrevNextHashes}] ->
 			% update the entry
 			true = ets:insert(Tid,
@@ -315,7 +315,8 @@ update_tree(NewEntries, S) ->
 		try_to_connect_floating_root(Tid,Entry,AccIn) end, [],
 		Roots ++ NewEntries),
 	
-	Leaves1 = lists:filter(fun(L)-> is_leafQ(Tid,L) end, Leaves ++ NewEntries),
+	Leaves1 = lists:filter(fun(Entry)-> is_leafQ(Tid,Entry) end,
+		Leaves ++ NewEntries),
 
 	Tips = find_tips(Tid, Leaves, GenesisBlockHash),
 
@@ -326,7 +327,7 @@ find_leaves(Tid) ->
 	ets:match_object(Tid, {'_','_','_',[]}).
 
 
-is_leafQ(Tid, Hash) ->
+is_leafQ(Tid, {Hash,_,_,_}=_Entry) ->
 	case ets:lookup(Tid, Hash) of
 		[{Hash, _, _, NextHashes}] -> NextHashes =:= []
 	end.
