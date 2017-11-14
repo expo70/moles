@@ -444,7 +444,7 @@ process_unknown_message(Unknown, Payload, S) ->
 %% returns NewState
 %% 
 get_command(S) ->
-	io:format("comm:get_command~n",[]),
+	%io:format("comm:get_command~n",[]),
 	cancel_timer_if_not_undefined(S#state.timer_ref_find_job),
 	TimerRefFindJob = erlang:send_after(?FIND_JOB_INTERVAL, self(), find_job),
 	cancel_timer_if_not_undefined(S#state.timer_ref_ping),
@@ -491,8 +491,8 @@ get_command(S) ->
 		{error, checksum, {_NetType, Rest}}->
 			exit(checksum);
 		{error, incomplete, Rest}->
-			io:format("comm:get_command - incomplete (~w), len=~w~n",
-				[Rest, byte_size(Rest)]),
+			%io:format("comm:get_command - incomplete (~w), len=~w~n",
+			%	[Rest, byte_size(Rest)]),
 			S
 	end,
 	
@@ -557,6 +557,7 @@ do_job({_Target, JobSpec, _ExpirationTime, _Stamps}, S) ->
 	case JobSpec of
 		{getheaders, Hashes} ->
 			io:format("comm:job getheaders~n",[]),
+			io:format("\t~p~n",[[protocol:parse_hash(H) || H<-Hashes]]),
 			HashStrs = [protocol:parse_hash(H) || H <- Hashes],
 			Message = protocol:getheaders(NetType,
 				{ProtocolVersion, HashStrs, ?HASH256_ZERO_STR}),

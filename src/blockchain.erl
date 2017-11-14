@@ -335,6 +335,7 @@ insert_new_entries(Tid, Entries, GenesisBlockHash) ->
 %% existing entries in the table.
 %% We also assume in this update function that there are only additinal changes.
 update_tree(NewEntries, S) ->
+	io:format("update_tree got ~w new entries.~n",[length(NewEntries)]),
 	NetType = S#state.net_type,
 	GenesisBlockHash = rules:genesis_block_hash(NetType),
 	Tid = S#state.tid_tree,
@@ -350,7 +351,7 @@ update_tree(NewEntries, S) ->
 	Leaves1 = lists:filter(fun(Entry)-> is_leafQ(Tid,Entry) end,
 		Leaves ++ NewEntries),
 
-	Tips = find_tips(Tid, Leaves, GenesisBlockHash),
+	Tips = find_tips(Tid, Leaves1, GenesisBlockHash),
 
 	S#state{roots=Roots1, leaves=Leaves1, tips=Tips}.
 
@@ -524,8 +525,8 @@ for_each_header_chunk_from_bin(Acc, ProcessHeaderFunc,
 
 
 report_errornous_entries(Entries) ->
-	io:format("reporting ~w errornous header entries:~n", [length(Entries)]),
-	io:format("~w~n", [Entries])
+	io:format("reporting ~w errornous header entries:~n", [length(Entries)])
+	%io:format("~w~n", [Entries])
 	.
 
 
@@ -631,6 +632,7 @@ exponential_sampling_loop(Acc, Hash, N, {A,P}, Gap, TidTree) ->
 
 
 process_jobs(S) ->
+	Tid = S#state.tid_tree,
 	Tips = S#state.tips,
 
 	S1 =
@@ -640,9 +642,15 @@ process_jobs(S) ->
 			case Tips of
 				[ ] -> S#state{tips_jobs=[]};
 				 _  ->
+				 	MaxDepth = 5,
+				 	ListOfList =
+					[extended_tip_hashes(Tid, T, MaxDepth) || T <- Tips],
 					[jobs:add_job({Target,
-						{getheaders, [T]},
-						60}) || Target <- TipsJobs, T <- Tips],
+						{getheaders, Hashes},
+						60}) || Target <- TipsJobs, Hashes <- ListOfList],
+					%[jobs:add_job({Target,
+					%	{getheaders, [Hash]},
+					%	60}) || Target <- TipsJobs, {_H,{Hash,_,_,_}} <- Tips],
 					S#state{tips_jobs=[]}
 			end
 	end,
@@ -659,7 +667,6 @@ process_jobs(S) ->
 						rules:genesis_block_hash(S1#state.net_type),
 					[GenesisBlockHash];
 				 _  ->
-					Tid = S#state.tid_tree,
 				 	T = hd(Tips),
 					Tips1 = u:list_rotate_left1(Tips),
 					{A,P} = {0.75,0.08},
@@ -668,7 +675,7 @@ process_jobs(S) ->
 
 			Hashes1 = lists:sublist(Hashes, ?MAX_HEADERS_COUNT),
 			[jobs:add_job({Target,
-				Hashes1,
+				{getheaders, Hashes1},
 				60}) || Target <- ExpSamplingJobs],
 			S1#state{exp_sampling_jobs=[], tips=Tips1}
 	end,

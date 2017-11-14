@@ -113,8 +113,10 @@ handle_cast({update_peer, PeerInfo}, S) ->
 
 handle_cast({got_headers, Payload, Origin}, S) ->
 	
-	{N_Headers, _} = protocol:read_var_int(Payload),
+	{N_Headers, _Rest} = protocol:read_var_int(Payload),
 	io:format("~w headers comming from ~w~n",[N_Headers, Origin]),
+	%{Header, _} = protocol:read_block_header(Rest),
+	%io:format("\tthe first one is ~p~n",[Header]),
 
 	blockchain:save_headers(Payload, Origin),
 	% new headers are not incorporetad into the tree until the next update_tree
