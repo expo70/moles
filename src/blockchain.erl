@@ -132,7 +132,7 @@ handle_call({collect_getheaders_hashes_exponential, {A,P}}, _From, S) ->
 
 	case S#state.tid_tree of
 		undefined -> %{reply, not_ready, S};
-			{reply, [[GenesisBlockHash]], S}; % required for startup
+			{reply, [GenesisBlockHash], S}; % required for startup
 		Tid ->
 			Tips = S#state.tips,
 
