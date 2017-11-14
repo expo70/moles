@@ -403,9 +403,6 @@ genesis_block_hash(regtest) -> ?REGTEST_GENESIS_BLOCK_HASH_BIN;
 genesis_block_hash(testnet) -> ?TESTNET_GENESIS_BLOCK_HASH_BIN.
 
 
-max_headers_counts() -> 2000.
-max_blocks_counts() -> 500.
-
 
 -ifdef(EUNIT).
 

@@ -398,8 +398,14 @@ process_sendheaders(Payload, S) ->
 
 process_headers(Payload, S) ->
 	%io:format("Packet (headers) = ~p~n", [protocol:parse_headers(Payload)]),
-	_Headers = protocol:parse_headers(Payload), % syntactic check
-	strategy:got_headers(Payload, S#state.peer_address),
+	{N_Headers,_} = protocol:read_var_int(Payload),
+	case N_Headers =< ?MAX_HEADERS_COUNT of
+		true ->
+			_Headers = protocol:parse_headers(Payload), % syntactic check
+			strategy:got_headers(Payload, S#state.peer_address);
+		false ->
+			exit(too_big_headers_count)
+	end,
 	S.
 
 
@@ -410,6 +416,8 @@ process_block(Payload, S) ->
 
 process_inv(Payload, S) ->
 	io:format("Packet (inv) = ~p~n", [protocol:parse_inv(Payload)]),
+	InvVects = protocol:parse_inv(Payload),
+	strategy:got_inv(InvVects, S#state.peer_address),
 	S.
 
 

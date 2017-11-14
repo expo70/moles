@@ -24,7 +24,8 @@
 	collect_getheaders_hashes_exponential/1,
 	get_floating_root_prevhashes/0,
 	get_best_height/0,
-	get_proposed_headers/2
+	get_proposed_headers/2,
+	create_getheaders_job_on_update/2
 	]).
 
 -include_lib("eunit/include/eunit.hrl").
@@ -43,7 +44,9 @@
 		tid_tree,
 		roots,
 		leaves,
-		tips
+		tips,
+		tips_jobs,
+		exp_sampling_jobs
 	}).
 
 
@@ -73,6 +76,10 @@ get_proposed_headers(PeerTreeHashes, StopHash) ->
 	gen_server:call(?MODULE,
 		{get_proposed_headers, PeerTreeHashes, StopHash}).
 
+create_getheaders_job_on_update(JobType, JobTarget) ->
+	gen_server:cast(?MODULE, {create_getheaders_job_on_update,
+		JobType, JobTarget}).
+
 
 %% ----------------------------------------------------------------------------
 %% gen_server callbacks
@@ -92,7 +99,9 @@ init([NetType]) ->
 	InitialState = #state{
 			net_type = NetType,
 			headers_file_path = HeadersFilePath,
-			new_entries = []
+			new_entries = [],
+			tips_jobs = [],
+			exp_sampling_jobs = []
 		},
 	
 	InitialState1 = load_entries_from_file(InitialState),
@@ -129,7 +138,7 @@ handle_call({collect_getheaders_hashes_exponential, {A,P}}, _From, S) ->
 				[ ] -> {reply, [GenesisBlockHash], S};
 				 _  ->
 				 	Tip = hd(Tips),
-					Tips1 = u:rotte_list_left1(Tips),
+					Tips1 = u:list_rotate_left1(Tips),
 				 	Advertise = exponentially_sampled_hashes(Tid, Tip, {A,P}),
 					{reply, Advertise, S#state{tips=Tips1}}
 			end
@@ -172,7 +181,7 @@ handle_call({get_proposed_headers, PeerTreeHashes, StopHash},
 					{_H, TipEntry} = hd(Tips),
 					climb_tree_until(Entry, TipEntry, Tid)
 			end,
-			Entries1 = lists:sublist(Entries,rules:max_headers_counts()),
+			Entries1 = lists:sublist(Entries,?MAX_HEADERS_COUNT),
 			Entries2 =
 			case StopHash of
 				?HASH256_ZERO_BIN -> Entries1;
@@ -207,7 +216,19 @@ handle_cast({save_headers, HeadersPayload, Origin}, S) ->
 	file:close(F),
 
 	io:format("saved ~w headers from ~w~n",[N_Headers,Origin]),
-	{noreply, S#state{new_entries=NewEntries1}}.
+	{noreply, S#state{new_entries=NewEntries1}};
+
+handle_cast({create_getheaders_job_on_update, JobType, JobTarget}, S) ->
+	case JobType of
+		tips ->
+			TipsJobs = S#state.tips_jobs,
+			TipsJobs1 = [JobTarget|TipsJobs],
+			{noreply, S#state{tips_jobs=TipsJobs1}};
+		exponential_sampling ->
+			ExpSamplingJobs = S#state.exp_sampling_jobs,
+			ExpSamplingJobs1 = [JobTarget|ExpSamplingJobs],
+			{noreply, S#state{exp_sampling_jobs=ExpSamplingJobs1}}
+	end.
 
 
 handle_info(update_tree, S) ->
@@ -256,8 +277,10 @@ handle_info(update_tree, S) ->
 			end
 	end,
 
+	S3 = process_jobs(S2),
+
 	erlang:send_after(?TREE_UPDATE_INTERVAL, self(), update_tree),
-	{noreply, S2}.
+	{noreply, S3}.
 
 
 
@@ -605,6 +628,50 @@ exponential_sampling_loop(Acc, Hash, N, {A,P}, Gap, TidTree) ->
 	end.
 
 
+process_jobs(S) ->
+	Tips = S#state.tips,
+
+	S1 =
+	case S#state.tips_jobs of
+		[] -> S;
+		TipsJobs ->
+			case Tips of
+				[ ] -> S#state{tips_jobs=[]};
+				 _  ->
+					[jobs:add_job({Target,
+						{getheaders, [T]},
+						60}) || Target <- TipsJobs, T <- Tips],
+					S#state{tips_jobs=[]}
+			end
+	end,
+
+	S2 =
+	case S#state.exp_sampling_jobs of
+		[] -> S1;
+		ExpSamplingJobs ->
+			Hashes =
+			case Tips of
+				[ ] ->
+					Tips1 = [], %dummy
+					GenesisBlockHash = 
+						rules:genesis_block_hash(S1#state.net_type),
+					[GenesisBlockHash];
+				 _  ->
+					Tid = S#state.tid_tree,
+				 	T = hd(Tips),
+					Tips1 = u:list_rotate_left1(Tips),
+					{A,P} = {0.75,0.08},
+				 	exponentially_sampled_hashes(Tid, T, {A,P})
+			end,
+
+			Hashes1 = lists:sublist(Hashes, ?MAX_HEADERS_COUNT),
+			[jobs:add_job({Target,
+				Hashes1,
+				60}) || Target <- ExpSamplingJobs],
+			S1#state{exp_sampling_jobs=[], tips=Tips1}
+	end,
+
+	S2.
 
 
 -ifdef(EUNIT).

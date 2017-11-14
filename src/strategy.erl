@@ -3,6 +3,8 @@
 
 -behaviour(gen_server).
 
+-include("../include/constants.hrl").
+
 -record(state,
 	{
 		net_type,
@@ -14,7 +16,7 @@
 
 %% API
 -export([start_link/1, add_peer/1, remove_peer/0, update_peer/1,
-	got_headers/2, got_getheaders/2, got_addr/2]).
+	got_headers/2, got_getheaders/2, got_addr/2, got_inv/2]).
 
 %% gen_server callbak
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2]).
@@ -46,6 +48,9 @@ got_getheaders(GetHeaders, Origin) ->
 got_addr(Addr, Origin) ->
 	gen_server:cast(?MODULE, {got_addr, Addr, Origin}).
 
+got_inv(InvVects, Origin) ->
+	gen_server:cast(?MODULE, {got_inv, InvVects, Origin}).
+
 
 %% ----------------------------------------------------------------------------
 %% gen_server callback
@@ -74,7 +79,7 @@ handle_cast({add_peer, IP_Address}, S) ->
 	N_Peers = S#state.n_peers,
 	
 	case Mode of
-		header_first ->
+		header_first1 ->
 			MaxDepth = 5,
 			case blockchain:collect_getheaders_hashes(MaxDepth) of
 				not_ready -> ok;
@@ -84,6 +89,14 @@ handle_cast({add_peer, IP_Address}, S) ->
 					[jobs:add_job(
 					{IP_Address, {getheaders,Hashes}, 60}) 
 					|| Hashes <- ListOfList]
+			end;
+		header_first ->
+			{A,P} = {0.75,0.08},
+			case blockchain:collect_getheaders_hashes_exponential({A,P}) of
+				not_ready -> ok;
+				Hashes ->
+					Hashes1 = lists:sublist(Hashes,?MAX_HEADERS_COUNT),
+					jobs:add_job({IP_Address, {getheaders,Hashes1}, 60})
 			end
 	end,
 	
@@ -100,7 +113,27 @@ handle_cast({update_peer, PeerInfo}, S) ->
 
 handle_cast({got_headers, Payload, Origin}, S) ->
 	
+	{N_Headers, _} = protocol:read_var_int(Payload),
+	io:format("~w headers comming from ~w~n",[N_Headers, Origin]),
+
 	blockchain:save_headers(Payload, Origin),
+	% new headers are not incorporetad into the tree until the next update_tree
+
+	if
+		N_Headers == ?MAX_HEADERS_COUNT ->
+			% try to obtain more headers
+			blockchain:create_getheaders_job_on_update(
+				tips,
+				Origin
+				);
+		N_Headers <  ?MAX_HEADERS_COUNT ->
+			% peer seems to send all the headers available
+			% now we annouce the current view of the tree to the other peers
+			blockchain:create_getheaders_job_on_update(
+				exponential_sampling,
+				{except, Origin}
+				)
+	end,
 
 	{noreply, S};
 
@@ -112,7 +145,7 @@ handle_cast({got_getheaders, {_Version, HashStrs, StopHashStr}, Origin}, S) ->
 	
 	case Payload of
 		<<>> -> ok;
-		_ -> jobs:add_job(Origin, {headers, Payload}, 60)
+		_ -> jobs:add_job({Origin, {headers, Payload}, 60})
 	end,
 	{noreply, S};
 
@@ -157,6 +190,16 @@ handle_cast({got_addr, NetAddrs, Origin}, S) ->
 		|| {_,_,IP_Address,_} <- NetAddrs1],
 	lists:foreach(fun(J) -> jobs:add_job({{except,Origin},J,60*10}) end,
 		JobSpecs),
+
+	{noreply, S};
+
+handle_cast({got_inv, InvVects, _Origin}, S) ->
+	_Mode = S#state.mode,
+
+	_BlockHashes = [protocol:hash(HashStr) || {msg_block, HashStr} <-InvVects],
+	_TxHashes    = [protocol:hash(HashStr) || {msg_tx,    HashStr} <-InvVects],
+
+	%FIXME, not implemented yet
 
 	{noreply, S}.
 
