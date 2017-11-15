@@ -15,7 +15,7 @@
 	}).
 
 %% API
--export([start_link/1, add_peer/1, remove_peer/0, update_peer/1,
+-export([start_link/1, add_peer/1, remove_peer/1,
 	got_headers/2, got_getheaders/2, got_addr/2, got_inv/2]).
 
 %% gen_server callbak
@@ -33,11 +33,8 @@ start_link(NetType) ->
 add_peer(IP_Address) ->
 	gen_server:cast(?MODULE, {add_peer, IP_Address}).
 
-remove_peer() ->
-	gen_server:cast(?MODULE, remove_peer).
-
-update_peer(PeerInfo) ->
-	gen_server:cast(?MODULE, {update_peer, PeerInfo}).
+remove_peer(IP_Address) ->
+	gen_server:cast(?MODULE, {remove_peer, IP_Address}).
 
 got_headers(Payload, Origin) ->
 	gen_server:cast(?MODULE, {got_headers, Payload, Origin}).
@@ -100,19 +97,18 @@ handle_cast({add_peer, IP_Address}, S) ->
 			end
 	end,
 	
-	peer_finder:new_peer(IP_Address),
+	peer_finder:on_added_peer(IP_Address),
+
 	io:format("strategy:add_peer~n",[]),
 	{noreply, S#state{n_peers=N_Peers+1}};
 
-handle_cast(remove_peer, S) ->
+handle_cast({remove_peer, IP_Address}, S) ->
 	N_Peers = S#state.n_peers,
+	
+	peer_finder:on_removed_peer(IP_Address),
+
 	io:format("strategy:remove_peer~n",[]),
 	{noreply, S#state{n_peers=N_Peers-1}};
-
-handle_cast({update_peer, PeerInfo}, S) ->
-	peer_finder:update_peer(PeerInfo),
-	io:format("strategy:update_peer~n",[]),
-	{noreply, S};
 
 handle_cast({got_headers, Payload, Origin}, S) ->
 	
@@ -173,13 +169,14 @@ handle_cast({got_addr, NetAddrs, Origin}, S) ->
 		_ -> NetAddrs
 	end,
 	
-	introduce_peers(NetAddrs1),
+	lists:foreach(fun(N) -> peer_finder:update_peer(N) end, NetAddrs1),
 	JobSpecs = [
 		begin
 			% always found
 			{IP_Address, _UserAgent, ServicesFlag, _BestHeight,
-				LastUseTime, _TotalUseDuration, _TotalInBytes, _TotalOutBytes}
-				= peer_finder:find_peer(IP_Address),
+				LastUseTime, _TotalUseDuration, _TotalInBytes, _TotalOutBytes,
+				_LastError}
+				= peer_finder:get_peer_info(IP_Address),
 			AdvertisedTime =
 			case LastUseTime of
 				{new, Time} -> Time;
@@ -250,21 +247,4 @@ request_peer(S) ->
 	erlang:send_after(?CHECK_N_PEERS_INTERVAL, self(), check_n_peers),
 	{noreply, S}.
 
-
-% {Time,
-% 	parse_services(Services),
-%	parse_ip_address(IPAddress),
-%	Port}
-introduce_peers([]) -> ok;
-introduce_peers([{Time, Services, IP_Address, _Port}|T]) ->
-	PeerInfo =
-	case Time of
-		null -> {IP_Address, undefined, Services, undefined,
-			{new,erlang:system_time(second)}, 0, 0, 0};
-		_ -> {IP_Address, undefined, Services, undefined,
-			{new,Time}, 0, 0, 0}
-	end,
-		
-	peer_finder:register_peer(PeerInfo),
-	introduce_peers(T).
 

@@ -95,6 +95,10 @@ start_link(NetType, {CommType, CommTarget}) ->
 %% NOTE: don't use incoming socket in this function
 init([NetType, {CommType, CommTarget}]) ->
 	io:format("comm:init~n",[]),
+	% trap_exit flag is required for terminate function to be called
+	% when application:stop shuts down the supervision tree.
+	process_flag(trap_exit, true),
+
 	{ok, MyAddress} =
 	case NetType of
 		mainnet -> application:get_env(my_global_address);
@@ -167,7 +171,7 @@ handle_cast({assync_init_outgoing, {PeerAddress, PeerPort}, S}, _S) ->
 			S2 = send_first_version_message(S1),
 			{noreply, S2};
 		{error, Reason} ->
-			stop({connect_failed, Reason}, S)
+			stop({connect_failed, Reason}, S#state{peer_address=PeerAddress})
 	end;
 handle_cast({assync_init_incoming, Socket, S}, _S) ->
 	ok = acceptor:request_control(Socket, self()),
@@ -176,11 +180,16 @@ handle_cast({assync_init_incoming, Socket, S}, _S) ->
 	{ok, {_MyAddress, MyPort}} = inet:sockname(Socket),
 	io:format("connection from ~p:~p...~n",[PeerAddress, PeerPort]),
 
-	inet:setopts(Socket, [{active, once}]),
+	S1 = S#state{socket=Socket, comm_type=incoming,
+		peer_address=PeerAddress, peer_port=PeerPort, my_port=MyPort},
 
-	{noreply, S#state{socket=Socket, comm_type=incoming,
-		peer_address=PeerAddress, peer_port=PeerPort,
-		my_port=MyPort}}.
+	case peer_finder:check_now_in_use(PeerAddress) of
+		true ->
+			stop(peer_duplicated, S1);
+		false ->
+			inet:setopts(Socket, [{active, once}]),
+			{noreply, S1}
+	end.
 
 
 %% TCP related messages
@@ -236,20 +245,34 @@ handle_info(handshake_timeout, S) ->
 	stop(handshake_timeout, S).
 
 
-terminate(_Reason, S) ->
+terminate(Reason, S) ->
 	case S#state.socket of
-		undefined -> ok;
+		undefined ->
+			peer_finder:update_peer_last_error(S#state.peer_address, Reason);
 		Socket ->
-			%gen_tcp:shutdown(Socket, write),
 			ok = gen_tcp:close(Socket),
-			case handshakeQ(S) of
-				true ->
-					strategy:remove_peer();
-				false -> ok
+			PeerAddress = S#state.peer_address,
+			case Reason of
+				shutdown ->
+					% when application:stop, stratey process is shut down before
+					% comm process is shut down according to the initilization
+					% order in the supervision tree.
+					PeerInfo = current_peer_info(S, normal),
+					peer_finder:update_peer(PeerInfo);
+				peer_duplicated ->
+					ok;
+				Error ->
+					% when an error has been occured
+					case handshakeQ(S) of
+						true ->
+							strategy:remove_peer(PeerAddress),
+							PeerInfo = current_peer_info(S, Error),
+							peer_finder:update_peer(PeerInfo);
+						false -> ok
+					end
 			end
 	end,
-	%io:format("terminating at state = ~w~nReason = ~p~n",[S,Reason]).
-	io:format("comm:terminate~n",[]),
+	io:format("comm:terminate - Reason = ~p~n",[Reason]),
 	ok.
 
 
@@ -549,9 +572,9 @@ on_handshake(S) ->
 	strategy:add_peer(S#state.peer_address).
 
 
-current_peer_info(S) ->
+current_peer_info(S, ErrorState) ->
 	EndTime = erlang:system_time(second),
-	Duration = S#state.start_time - EndTime,
+	Duration = EndTime - S#state.start_time,
 	PeerInfo = {S#state.peer_address,
 		S#state.peer_user_agent,
 		S#state.peer_services,
@@ -559,7 +582,8 @@ current_peer_info(S) ->
 		EndTime,
 		Duration,
 		S#state.in_bytes,
-		S#state.out_bytes
+		S#state.out_bytes,
+		ErrorState
 	},
 	PeerInfo.
 
