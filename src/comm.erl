@@ -102,7 +102,7 @@ init([NetType, {CommType, CommTarget}]) ->
 		regtest -> application:get_env(my_local_address)
 	end,
 	MyProtocolVersion = 70015, %latest version at this time
-	MyServices = [node_witness],
+	MyServices = [node_network, node_witness],
 	MyBestHeight = blockchain:get_best_height(),
 	StartTime = erlang:system_time(second),
 	TimerRef = erlang:send_after(?HANDSHAKE_TIMEOUT,self(),handshake_timeout),
@@ -208,7 +208,7 @@ handle_info(find_job, S) ->
 			do_job(Job, S)
 	end,
 
-	io:format("comm:find_job finished.~n",[]),
+	%io:format("comm:find_job finished.~n",[]),
 	TimerRefFindJob = erlang:send_after(?FIND_JOB_INTERVAL, self(), find_job),
 	{noreply, S1#state{timer_ref_find_job=TimerRefFindJob}};
 
@@ -249,6 +249,7 @@ terminate(_Reason, S) ->
 			end
 	end,
 	%io:format("terminating at state = ~w~nReason = ~p~n",[S,Reason]).
+	io:format("comm:terminate~n",[]),
 	ok.
 
 
@@ -384,6 +385,10 @@ process_addr(Payload, S) ->
 	strategy:got_addr(Addr, S#state.peer_address),
 	S.
 
+process_getaddr(<<>> =_Payload, S) ->
+	io:format("Pakcet (getaddr)~n",[]),
+	S.
+
 
 process_getheaders(Payload, S) ->
 	%io:format("Packet (getheaders) = ~p~n", [protocol:parse_getheaders(Payload)]),
@@ -411,6 +416,12 @@ process_headers(Payload, S) ->
 
 process_block(Payload, S) ->
 	io:format("Packet (block) = ~p~n", [protocol:read_block(Payload)]),
+	S.
+
+
+process_getdata(_Payload, S) ->
+	io:format("Pakcet (getdata)~n",[]),
+	
 	S.
 
 
@@ -466,6 +477,8 @@ get_command(S) ->
 					process_pong(Payload, S);
 				addr ->
 					process_addr(Payload, S);
+				getaddr ->
+					process_getaddr(Payload, S);
 				getheaders ->
 					process_getheaders(Payload, S);
 				sendheaders ->
@@ -474,6 +487,8 @@ get_command(S) ->
 					process_headers(Payload, S);
 				block ->
 					process_block(Payload, S);
+				getdata ->
+					process_getdata(Payload, S);
 				inv ->
 					process_inv(Payload, S);
 				tx ->
@@ -557,7 +572,7 @@ do_job({_Target, JobSpec, _ExpirationTime, _Stamps}, S) ->
 	case JobSpec of
 		{getheaders, Hashes} ->
 			io:format("comm:job getheaders~n",[]),
-			io:format("\t~p~n",[[protocol:parse_hash(H) || H<-Hashes]]),
+			%io:format("\t~p~n",[[protocol:parse_hash(H) || H<-Hashes]]),
 			HashStrs = [protocol:parse_hash(H) || H <- Hashes],
 			Message = protocol:getheaders(NetType,
 				{ProtocolVersion, HashStrs, ?HASH256_ZERO_STR}),

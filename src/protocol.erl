@@ -645,7 +645,9 @@ object_type(ObjectType) ->
 		msg_tx             -> 1;
 		msg_block          -> 2;
 		msg_filtered_block -> 3;
-		msg_cmpct_block    -> 4
+		msg_cmpct_block    -> 4;
+		msg_witness_tx     -> 16#40000001;
+		msg_witness_block  -> 16#40000002
 	end.
 
 parse_object_type(Type) ->
@@ -654,7 +656,9 @@ parse_object_type(Type) ->
 		1 -> msg_tx;
 		2 -> msg_block;
 		3 -> msg_filtered_block;
-		4 -> msg_cmpct_block
+		4 -> msg_cmpct_block;
+		16#40000001 -> msg_witness_tx; % BIP-144; only for use in getdata
+		16#40000002 -> msg_witness_block % same as above
 	end.
 
 % CompactSize

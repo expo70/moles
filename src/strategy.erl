@@ -101,14 +101,17 @@ handle_cast({add_peer, IP_Address}, S) ->
 	end,
 	
 	peer_finder:new_peer(IP_Address),
+	io:format("strategy:add_peer~n",[]),
 	{noreply, S#state{n_peers=N_Peers+1}};
 
 handle_cast(remove_peer, S) ->
 	N_Peers = S#state.n_peers,
+	io:format("strategy:remove_peer~n",[]),
 	{noreply, S#state{n_peers=N_Peers-1}};
 
 handle_cast({update_peer, PeerInfo}, S) ->
 	peer_finder:update_peer(PeerInfo),
+	io:format("strategy:update_peer~n",[]),
 	{noreply, S};
 
 handle_cast({got_headers, Payload, Origin}, S) ->

@@ -206,7 +206,7 @@ handle_cast({save_headers, HeadersPayload, Origin}, S) ->
 	Tid = S#state.tid_tree, %NOTE, can be undefined headers are empty
 	HeadersFilePath = S#state.headers_file_path,
 
-	{N_Headers, Rest} = protocol:read_var_int(HeadersPayload),
+	{_N_Headers, Rest} = protocol:read_var_int(HeadersPayload),
 
 	%NOTE: the file is created if it does not exist.
 	{ok,F} = file:open(HeadersFilePath,[write,binary,append]),
@@ -217,7 +217,7 @@ handle_cast({save_headers, HeadersPayload, Origin}, S) ->
 
 	file:close(F),
 
-	io:format("saved ~w headers from ~w~n",[N_Headers,Origin]),
+	%io:format("saved ~w headers from ~w~n",[N_Headers,Origin]),
 	{noreply, S#state{new_entries=NewEntries1}};
 
 handle_cast({create_getheaders_job_on_update, JobType, JobTarget}, S) ->
@@ -335,7 +335,7 @@ insert_new_entries(Tid, Entries, GenesisBlockHash) ->
 %% existing entries in the table.
 %% We also assume in this update function that there are only additinal changes.
 update_tree(NewEntries, S) ->
-	io:format("update_tree got ~w new entries.~n",[length(NewEntries)]),
+	%io:format("update_tree got ~w new entries.~n",[length(NewEntries)]),
 	NetType = S#state.net_type,
 	GenesisBlockHash = rules:genesis_block_hash(NetType),
 	Tid = S#state.tid_tree,
