@@ -42,8 +42,8 @@ bin_base_dir(Config) ->
 rawhex_URL({tx, Txid}, _Config) ->
 	S = rhash_string(Txid),
 	lists:flatten(io_lib:format("http://blockchain.info/tx/~s?format=hex",[S]));
-rawhex_URL({block, Txid}, _Config) ->
-	S = rhash_string(Txid),
+rawhex_URL({block, BlockHash}, _Config) ->
+	S = rhash_string(BlockHash),
 	lists:flatten(io_lib:format("http://blockchain.info/block/~s?format=hex",[S])).
 
 
@@ -113,7 +113,7 @@ create_index_from_block(BlockHash, Config) ->
 	BlockByteSize = filelib:file_size(BinDataPath),
 	{ok,Bin} = file:read_file(BinDataPath),
 
-	{{HashStr,_Version,_PrevBlockHash,_MerkleRootHash,_Timestamp,_Bits,_Nonce,TxnCount}=BlockHeader, Rest} = protocol:read_block_header(Bin),
+	{{HashStr,_Version,_PrevBlockHash,_MerkleRootHash,_Timestamp,_Bits,_Nonce,TxnCount}=_BlockHeader, Rest} = protocol:read_block_header(Bin),
 
 	BlockHash = protocol:hash(HashStr),
 	TxStartPos = BlockByteSize - byte_size(Rest),

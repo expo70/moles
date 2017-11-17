@@ -16,7 +16,7 @@
 
 %% API
 -export([start_link/1, add_peer/1, remove_peer/1,
-	got_headers/2, got_getheaders/2, got_addr/2, got_inv/2]).
+	got_headers/2, got_getheaders/2, got_addr/2, got_inv/2, got_tx/2]).
 
 %% gen_server callbak
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2]).
@@ -47,6 +47,9 @@ got_addr(Addr, Origin) ->
 
 got_inv(InvVects, Origin) ->
 	gen_server:cast(?MODULE, {got_inv, InvVects, Origin}).
+
+got_tx(Payload, Origin) ->
+	gen_server:cast(?MODULE, {got_tx, Payload, Origin}).
 
 
 %% ----------------------------------------------------------------------------
@@ -195,14 +198,17 @@ handle_cast({got_addr, NetAddrs, Origin}, S) ->
 
 	{noreply, S};
 
-handle_cast({got_inv, InvVects, _Origin}, S) ->
+handle_cast({got_inv, InvVects, Origin}, S) ->
 	_Mode = S#state.mode,
 
-	_BlockHashes = [protocol:hash(HashStr) || {msg_block, HashStr} <-InvVects],
-	_TxHashes    = [protocol:hash(HashStr) || {msg_tx,    HashStr} <-InvVects],
+	InvVectsTx = [IV || {msg_tx, _HashStr}=IV <- InvVects],
+	jobs:add_job({Origin, {getdata, InvVectsTx}, 5*60}),
 
-	%FIXME, not implemented yet
+	{noreply, S};
 
+handle_cast({got_tx, Payload, Origin}, S) ->
+	tx:add_to_mempool({tx, Payload}, Origin),
+	
 	{noreply, S}.
 
 

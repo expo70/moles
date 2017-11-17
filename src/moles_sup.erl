@@ -15,6 +15,12 @@ start_link(NetType) ->
 init([NetType]) ->
 	SupFlags = #{strategy => one_for_one},
 
+	ChildSpec0 = #{id => tx,
+		start => {tx, start_link, [NetType]},
+		restart => permanent,
+		shutdown => 3000, %timeout value
+		type => worker,
+		modules => [tx]},
 	ChildSpec1 = #{id => blockchain,
 		start => {blockchain, start_link, [NetType]},
 		restart => permanent,
@@ -54,6 +60,7 @@ init([NetType]) ->
 	
 	{ok,{SupFlags,
 		[
+		ChildSpec0,
 		ChildSpec1,
 		ChildSpec2,
 		ChildSpec3,

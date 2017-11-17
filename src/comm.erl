@@ -48,6 +48,7 @@
 		timer_ref_ping,
 		timer_ref_ping_timeout,
 		timer_ref_find_job,
+		timer_ref_getaddr,
 		in_bytes,
 		out_bytes,
 		buf
@@ -221,6 +222,13 @@ handle_info(find_job, S) ->
 	TimerRefFindJob = erlang:send_after(?FIND_JOB_INTERVAL, self(), find_job),
 	{noreply, S1#state{timer_ref_find_job=TimerRefFindJob}};
 
+handle_info(getaddr, S) ->
+	Message = protocol:getaddr(S#state.net_type),
+	{ok,S1} = send(S#state.socket, Message, S),
+
+	io:format("sent getaddr~n",[]),
+	{noreply, S1};
+
 handle_info(ping, S) ->
 	NetType = S#state.net_type,
 	S1 =
@@ -366,21 +374,23 @@ process_version(Payload, S) ->
 	Reply = protocol:verack(NetType),
 	{ok,S4} = send(Socket, Reply, S3),
 	
+	S5 =
 	case S4#state.peer_readyQ of
 		true -> on_handshake(S4);
-		false -> ok
+		false -> S4
 	end,
-	S4#state{my_readyQ = true}.
+	S5#state{my_readyQ = true}.
 
 
 process_verack(Payload, S) ->
 	io:format("Packet (verack) = ~p~n", [protocol:parse_verack(Payload)]),
 
+	S1 =
 	case S#state.my_readyQ of
 		true -> on_handshake(S);
-		false -> ok
+		false -> S
 	end,
-	S#state{peer_readyQ = true}.
+	S1#state{peer_readyQ = true}.
 
 
 process_ping(Payload, S) ->
@@ -442,8 +452,8 @@ process_block(Payload, S) ->
 	S.
 
 
-process_getdata(_Payload, S) ->
-	io:format("Pakcet (getdata)~n",[]),
+process_getdata(Payload, S) ->
+	io:format("Pakcet (getdata) = ~p~n",[protocol:parse_getdata(Payload)]),
 	
 	S.
 
@@ -456,7 +466,9 @@ process_inv(Payload, S) ->
 
 
 process_tx(Payload, S) ->
-	io:format("Packet (tx) = ~p~n", [protocol:read_tx(Payload)]),
+	%io:format("Packet (tx) = ~p~n", [protocol:read_tx(Payload)]),
+	io:format("Packet (tx)~n", []),
+	strategy:got_tx(Payload, S#state.peer_address),
 	S.
 
 
@@ -569,7 +581,10 @@ handshakeQ(S) -> S#state.peer_readyQ andalso S#state.my_readyQ.
 
 on_handshake(S) ->
 	erlang:cancel_timer(S#state.timer_ref_handshake_timeout),
-	strategy:add_peer(S#state.peer_address).
+	strategy:add_peer(S#state.peer_address),
+
+	TimerRefGetaddr = erlang:send_after(3*60*1000, self(), getaddr),
+	S#state{timer_ref_getaddr=TimerRefGetaddr}.
 
 
 current_peer_info(S, ErrorState) ->
@@ -591,7 +606,7 @@ current_peer_info(S, ErrorState) ->
 do_job({_Target, JobSpec, _ExpirationTime, _Stamps}, S) ->
 	Socket = S#state.socket,
 	NetType = S#state.net_type,
-	ProtocolVersion = S#state.my_protocol_version,
+	ProtocolVersion = S#state.peer_protocol_version,
 
 	case JobSpec of
 		{getheaders, Hashes} ->
@@ -605,6 +620,21 @@ do_job({_Target, JobSpec, _ExpirationTime, _Stamps}, S) ->
 		{headers, Payload} ->
 			io:format("comm:job headers~n",[]),
 			Message = protocol:message(NetType,headers,Payload),
+			{ok,S1} = send(Socket, Message, S),
+			S1;
+		{addr, {AdvertisedTime, Services, IP_Address, Port}} ->
+			% advertise one address
+			io:format("comm:job addr(1)~n",[]),
+			CountBin = protocol:var_int(1),
+			NetAddrBin = protocol:net_addr(AdvertisedTime,
+				IP_Address, Port, {Services, ProtocolVersion}),
+			Payload = <<CountBin/binary, NetAddrBin/binary>>,
+			Message = protocol:message(NetType,addr,Payload),
+			{ok,S1} = send(Socket, Message, S),
+			S1;
+		{getdata, InvVects} ->
+			io:format("comm:job getdata~n",[]),
+			Message = protocol:getdata(NetType, InvVects),
 			{ok,S1} = send(Socket, Message, S),
 			S1;
 		Unknown ->

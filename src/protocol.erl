@@ -123,8 +123,12 @@ message(NetType, Command, Payload) ->
 
 
 %% net_addr
+%% for IPv4-mapped IPv6 address
 net_addr({A,B,C,D}, Port, {ServicesType, MyProtocolVersion}) ->
-	Time = unix_timestamp(),
+	TimeNow = unix_timestamp(),
+	net_addr(TimeNow, {A,B,C,D}, Port, {ServicesType, MyProtocolVersion}).
+	
+net_addr(Time, {A,B,C,D}, Port, {ServicesType, MyProtocolVersion}) ->
 	Services = services(ServicesType),
 	IP6Address = <<0:(8*10), 16#FF, 16#FF, A:8, B:8, C:8, D:8>>,
 	if
@@ -189,6 +193,8 @@ parse_inv(Bin) ->
 	{Count, Rest} = read_var_int(Bin),
 	{InvVects, _Rest1} = read_inv_vect_n(Rest, Count),
 	InvVects.
+
+parse_getdata(Bin) -> parse_inv(Bin).
 
 %% getdata message
 getdata(NetType, InvVects) when is_list(InvVects) ->
