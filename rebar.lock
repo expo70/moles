@@ -1,1 +1,4 @@
-[].
+[{<<"ebus">>,
+  {git,"git://github.com/cabol/erlbus.git",
+       {ref,"a3e412b658df3ff876d71319702daa96140a789a"}},
+  0}].

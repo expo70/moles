@@ -11,6 +11,7 @@ default_config() -> #{
 	%NOTE: anonymous function seems not to be exported outside the module.
 	%http_get => fun(URL)-> io:cmd(lists:flatten(
 	%	io_lib:format("wget -q -O - ~s",[URL]))) end,
+	net_type => testnet,
 	overwriteQ => false,
 	bin_ext => ".bin",
 	bin_base_dir => ['HOME',"moles/tester-data"]
@@ -39,12 +40,19 @@ bin_base_dir(Config) ->
 
 
 %% Txid :: binary()
-rawhex_URL({tx, Txid}, _Config) ->
+rawhex_URL({tx, Txid}, Config) ->
 	S = rhash_string(Txid),
-	lists:flatten(io_lib:format("http://blockchain.info/tx/~s?format=hex",[S]));
+	URLTemplate =
+	case maps:get(net_type, Config) of
+		mainnet -> "http://blockchain.info/tx/~s?format=hex";
+		testnet -> "http://testnet.blockexplorer.com/api/rawtx/~s" % in JSON
+	end,
+	lists:flatten(io_lib:format(URLTemplate, [S]));
+
 rawhex_URL({block, BlockHash}, _Config) ->
 	S = rhash_string(BlockHash),
 	lists:flatten(io_lib:format("http://blockchain.info/block/~s?format=hex",[S])).
+
 
 
 bin_data_path({tx, Txid},Config) ->
@@ -77,7 +85,12 @@ get_binary({_ItemType, Hash}=Req,Config) when is_binary(Hash) ->
 			case RawHex of
 				[ ] -> <<>>; % http errors
 				 _  -> 
-					Bin = u:hexstr_to_bin(RawHex),
+					Bin = case maps:get(net_type, Config) of
+						mainnet -> u:hexstr_to_bin(RawHex);
+						testnet ->
+							#{<<"rawtx">> := StrBin} = jsone:decode(RawHex),
+							u:hexstr_to_bin(binary_to_list(StrBin))
+					end,
 					% save the result (cache)
 					Dir = filename:dirname(BinDataPath),
 					ok = filelib:ensure_dir(Dir++"/"), %NOTE: "/" is required!

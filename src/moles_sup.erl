@@ -57,6 +57,12 @@ init([NetType]) ->
 		shutdown => 3000, %timeout value
 		type => worker,
 		modules => [acceptor]},
+	ChildSpec7 = #{id => view,
+		start => {view, start_link, [{0,0}]}, %FIXME
+		restart => permanent,
+		shutdown => 3000, %timeout value
+		type => worker,
+		modules => [view]},
 	
 	{ok,{SupFlags,
 		[
@@ -66,6 +72,7 @@ init([NetType]) ->
 		ChildSpec3,
 		ChildSpec4,
 		ChildSpec5,
-		ChildSpec6
+		ChildSpec6,
+		ChildSpec7
 		]}}.
 
