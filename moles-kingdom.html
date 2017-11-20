@@ -23,11 +23,11 @@ window.onload = function() {
 		deltaY_y = -1/5.9,
 		s = Snap("#cave000");
 
-		//initialize scence
-		//Snap.load("../image/cave000.svg", function(frag) {
-		//	s.append(frag);
-		//	console.log(frag);
-		//});
+	// initialize scence
+	Snap.load("../image/cave001.svg", function(frag) {
+		s.append(frag);
+		console.log(frag);
+	});
 
 	// draw A block (size 1x1)
 	// x, y: center coordinate (Mathematical)
@@ -61,8 +61,6 @@ window.onload = function() {
 				fill: color
 			})
 			.transform("translate(0,200) scale(40,-40)");
-
-		//s.appendTo(s0);	
 	}
 	
 	function placed_block(name, nx, ny)
@@ -75,6 +73,7 @@ window.onload = function() {
 
 	draw_block(1,0,100,0,0);
 	draw_block(2,0,0,0,100);
+	draw_block(3,0,0,100,0);
 
 	//block(200,200,100,0,0);
 	//block(300,200,0,0,100);
