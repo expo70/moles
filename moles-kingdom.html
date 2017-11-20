@@ -1,0 +1,77 @@
+<html>
+<head><meta charset="utf-8">
+<title>Moles Kingdom</title>
+
+<style>
+svg {
+	background: #BC8C6C;
+}
+</style>
+
+<script src="../js/snap.svg-min.js"></script>
+</head>
+
+<body>
+<script>
+
+var W = 800;
+var H = 600;
+var d =  50;
+var r = d/8;
+var a = d/8;
+var b = d/6;
+var alpha = Math.sqrt(r*r/(a*a+b*b));
+var d1x = -d/2;
+var d1y =  d/2;
+var ex =  r - alpha*b;
+var ey = -r + alpha*a;
+var deltaX_x = d;
+var deltaX_y = 0;
+var deltaY_x = -d/8;
+var deltaY_y = -d/5.9;
+var s = Snap(W, H); //paper
+
+
+function block(x,y,R,G,B)
+{
+	var t11x = x+d1x+ex; var t11y = y+d1y+ey;
+	var t12x = t11x + a; var t12y = t11y;
+	var t13x = t11x + a; var t13y = t11y + b;
+
+	var t21x = x-d1x-ex; var t21y = y-d1y-ey;
+	var t22x = t21x;     var t22y = t21y + b;
+	var t23x = t21x + a; var t23y = t21y + b;
+
+	var color = Snap.getRGB("rgb("+R+","+G+","+B+")");
+	var darker_color = Snap.getRGB("rgb("+R/2+","+G/2+","+B/2+")");
+
+	var polygon1 = s.polyline([t11x, H-t11y, t12x, H-t12y, t13x, H-t13y]);
+	var polygon2 = s.polyline([t21x, H-t21y, t22x, H-t22y, t23x, H-t23y]);
+	var rect1 = s.rect(x-d/2+a,H-(y+d/2+b),d,d,r);
+	var edge = s.group(polygon1, polygon2, rect1);
+	edge.attr({
+		fill: darker_color.hex
+	});
+	var rect = s.rect(x-d/2,H-(y+d/2),d,d,r);
+	rect.attr({
+		fill: color.hex
+	});
+}
+
+function placed_block(name, nx, ny)
+{
+	block(nx*deltaX_x+ny*deltaY_x, H/2+nx*deltaX_y+ny*deltaY_y, 100,0,0);
+}
+
+//block(200,200,100,0,0);
+//block(300,200,0,0,100);
+placed_block("test",1,0);
+placed_block("test",2,0);
+placed_block("test",2,1);
+
+</script>
+
+
+</body>
+</html>
+
