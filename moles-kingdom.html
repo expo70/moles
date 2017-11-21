@@ -1,3 +1,6 @@
+<html>
+<head>
+<meta charset="utf-8" />
 <title>Moles Kingdom</title>
 
 <script src="../js/snap.svg-min.js"></script>
@@ -145,6 +148,45 @@ window.onload = function() {
 				+ mole_trans[mole_state]));
 
 		setTimeout(update_mole, 1000+Math.floor(Math.random()*2000)); // repeat
+	}
+
+	if("WebSocket" in window)
+	{
+		// WebSocket WebSocket(url, [protocols])
+		conn = new WebSocket("ws:/expo70.xyz:8081/websocket");
+
+		conn.onopen = function(event)
+		{
+			var subscription_msg =
+			{
+				cmd:   "sub",
+				coord: [0,0]
+			};
+			console.log("WebSocket.onopen()");
+
+			conn.send(JSON.stringify(subscription_msg));
+		}
+		conn.onmessage = function(event)
+		{
+			var msg = JSON.parse(event.data);
+			console.log(msg);
+		}
+		conn.onerror = function(event)
+		{
+			window.alert("Failed to connect mole server\nモグラ・サーバーへの接続失敗");
+		}
+		conn.onclose = function(event)
+		{
+			console.log("WebSocket.onclose()");
+		}
+
+		// close([code], [reason])
+		// send(data)
+
+	}
+	else
+	{
+		window.alert("Moles Kingdom requires browser support for websocket.\nWebsocketへのブラウザー対応が動作に必要です。");
 	}
 
 }
