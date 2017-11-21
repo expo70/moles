@@ -30,14 +30,25 @@ window.onload = function() {
 		mole = Snap("#mole").remove();
 
 	var mole_left = mole
-		.select(".left")
-		.transform("translate("+(-mole_W*0.5)+","+(-mole_H*0.5)+")");
+		.select(".left");
+	var mole_left_trans = "translate("+(-mole_W*2.5)+","+(-mole_H*0.5)+")";
 	var mole_front = mole
-		.select(".front")
-		.transform("translate("+(-mole_W*1.5)+","+(-mole_H*0.5)+")");
+		.select(".front");
+	var mole_front_trans = "translate("+(-mole_W*1.5)+","+(-mole_H*0.5)+")";
 	var mole_right = mole
-		.select(".right")
-		.transform("translate("+(-mole_W*2.5)+","+(-mole_H*0.5)+")");
+		.select(".right");
+	var mole_right_trans = "translate("+(-mole_W*0.5)+","+(-mole_H*0.5)+")";
+	var mole_sprite = {
+		'left'  : mole_left,
+		'front' : mole_front,
+		'right' : mole_right
+		};
+	var mole_trans = {
+		'left'  : mole_left_trans,
+		'front' : mole_front_trans,
+		'right' : mole_right_trans
+		};
+	var mole_state = 'front';
 	var palette = setup_palette();
 
 
@@ -87,6 +98,11 @@ window.onload = function() {
 			nx*deltaX_y+ny*deltaY_y,
 			R,G,B);
 	}
+	function place_random_block(n)
+	{
+		for(i=0; i<n; i++)place_block(Math.floor(Math.random()*palette_counts),
+			i, 0);
+	}
 
 	function setup_palette()
 	{
@@ -98,18 +114,37 @@ window.onload = function() {
 	//draw_block(1,0,100,0,0);
 	//draw_block(2,0,0,0,100);
 	//draw_block(3,0,0,100,0);
-	//s.append(mole_front.transform("translate(300,150)"));
 	//s.append(cave);
 	//s.clear();
-	place_block(0, 1,0);
-	place_block(1, 2,0);
-	place_block(2, 3,0);
-	place_block(3, 3,1);
-	place_block(4, 4,0);
-	place_block(5, 5,0);
+	place_random_block(10);
 	s.append(cave);
 
+	setTimeout(update_mole, 3000);
 
+	function update_mole()
+	{
+		mole_sprite[mole_state].remove();
+
+		switch(mole_state)
+		{
+		case 'left':
+			if(Math.random()>0.3)mole_state = 'front';
+			break;
+		case 'front':
+			if(Math.random()>0.5)mole_state = 'left';
+			else mole_state = 'right';
+			break;
+		case 'right':
+			if(Math.random()>0.3)mole_state = 'front';
+			break;
+		}
+
+		s.append(mole_sprite[mole_state]
+			.transform("translate(400,200)" + " "
+				+ mole_trans[mole_state]));
+
+		setTimeout(update_mole, 1000+Math.floor(Math.random()*2000)); // repeat
+	}
 
 }
 
