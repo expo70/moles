@@ -114,6 +114,11 @@ window.onload = function() {
 		];
 	}
 
+	function color_from_block_hash(hash)
+	{
+		return parseInt(hash.slice(hash,-2),16) % palette_counts;
+	}
+
 	//draw_block(1,0,100,0,0);
 	//draw_block(2,0,0,0,100);
 	//draw_block(3,0,0,100,0);
@@ -170,14 +175,32 @@ window.onload = function() {
 			setInterval(function(){
 					if(conn.readyState == WebSocket.OPEN)
 					{
-						conn.send(JSON.stringify({ cmd: "heartbeat" }));
+						conn.send(JSON.stringify({ cmd: 'heartbeat' }));
 					}
 				}, 30*1000);
 		}
 		conn.onmessage = function(event)
 		{
 			var msg = JSON.parse(event.data);
-			console.log(msg);
+			if('cmd' in msg)
+			{
+				switch(msg['cmd'])
+				{
+				case 'update_blockchain':
+					s.clear();
+					for(var i in msg['view'])
+					{
+						var h_xy = msg['view'][i];
+						place_block(color_from_block_hash(h_xy[0]),
+							h_xy[1][0],h_xy[1][1]);
+					}
+					s.append(mole_sprite[mole_state]
+						.transform("translate(400,200)" + " "
+							+ mole_trans[mole_state]));
+					s.append(cave);
+					break;
+				}
+			}
 		}
 		conn.onerror = function(event)
 		{

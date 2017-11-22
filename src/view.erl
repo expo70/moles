@@ -41,7 +41,9 @@ update_blockchain(PaintedTree) ->
 	%% prepare for JSON conversion
 	%% change hash to string
 	%% {X,Y}-coordinates to list
-	View1 = maps:from_list([{list_to_binary(u:bin_to_hexstr(Hash,"",little)),[X,Y]} || {Hash,{X,Y}} <- View]),
+	%% Maps (dict in JSON) cannot be used here because the order of
+	%% the blocks in the list is important.
+	View1 = [[list_to_binary(u:bin_to_hexstr(Hash,"",little)),[X,Y]] || {Hash,{X,Y}} <- View],
 
 	What = #{ cmd => update_blockchain, view => View1 },
 	gen_server:cast(?MODULE, {update, What}).
