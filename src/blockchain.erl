@@ -45,6 +45,7 @@
 		roots,
 		leaves,
 		tips,
+		subtips,
 		tips_jobs,
 		exp_sampling_jobs
 	}).
@@ -304,10 +305,11 @@ initialize_tree(Entries, S) ->
 		try_to_connect_floating_root(Tid,Entry,AccIn) end, [], Tid),
 
 	Leaves = find_leaves(Tid),
-	Tips = find_tips(Tid, Leaves, GenesisBlockHash),
+	{Tips, Subtips} = find_tips(Tid, Leaves, GenesisBlockHash),
 
 	io:format("blockchain:initialize_tree finished.~n",[]),
-	S#state{tid_tree=Tid, roots=Roots, leaves=Leaves, tips=Tips}.
+	S#state{tid_tree=Tid, roots=Roots, leaves=Leaves,
+		tips=Tips, subtips=Subtips}.
 
 
 % floating (non-connected) entry is added into AccIn
@@ -351,9 +353,9 @@ update_tree(NewEntries, S) ->
 	Leaves1 = lists:filter(fun(Entry)-> is_leafQ(Tid,Entry) end,
 		Leaves ++ NewEntries),
 
-	Tips = find_tips(Tid, Leaves1, GenesisBlockHash),
+	{Tips, Subtips} = find_tips(Tid, Leaves1, GenesisBlockHash),
 
-	S#state{roots=Roots1, leaves=Leaves1, tips=Tips}.
+	S#state{roots=Roots1, leaves=Leaves1, tips=Tips, subtips=Subtips}.
 
 
 find_leaves(Tid) ->
@@ -375,6 +377,10 @@ split_entries_by_fork_type(Tid) ->
 		end end, {[],[],[]}, Tid).
 
 
+%% (Leaf)-> o-> o-> o-> x
+%% H = 4    3   2   1   0
+%%                  |
+%%                 root
 find_root_of_leaf(Tid, Leaf) -> find_root_of_leaf(1, Tid, Leaf).
 
 find_root_of_leaf(Height, Tid, {_,_,PrevHash,_}=Entry) ->
@@ -389,6 +395,8 @@ find_root_of_leaf(Height, Tid, {_,_,PrevHash,_}=Entry) ->
 %% Tip is the highest leaf among leaves whose roots are the genesis block.
 %% There can be multiple tips.
 %%
+%% returns {Tips, Subtips}
+%% Tips = [Tip|T], Tip = {Height,TreeEntry}
 find_tips(Tid, Leaves, GenesisBlockHash) ->
 	RootInfos   = [{L,find_root_of_leaf(Tid, L)} || L <- Leaves],
 	RootHeights = [{Height,L}
@@ -400,7 +408,56 @@ find_tips(Tid, Leaves, GenesisBlockHash) ->
 			SortedRootHeights = lists:sort(fun({H1,_},{H2,_})-> H1 >= H2 end, 
 				RootHeights),
 			{TopHeight,_} = hd(SortedRootHeights),
-			lists:takewhile(fun({H,_}) -> H==TopHeight end, SortedRootHeights)
+			lists:splitwith(fun({H,_}) -> H==TopHeight end, SortedRootHeights)
+	end.
+
+
+%% paint tree entries according to their stem-ness
+%% (stem = level 0, braches = level 1, 2, ...).
+%% The painting process starts only from tips and subtips, 
+%% i.e., leaves whose root is the genesis root.
+%%
+%% returns the list of
+%% {E, {0, _, H'}} for the stem entries, or
+%% {E, {BranchLevel, ForkPointE, H'}} for general entries,
+%% where H' is the relative height of each entry from the painting limit
+%% for the stem entries (when MaxLength = Best height, H' == H (height))
+%% or lengthes from their fork points for general entries.
+%%
+%% The output painted list is always in order of increasing BranchLevel.
+%% 
+get_painted_tree(_Tid, {[], _Subtips}, _MaxLength) -> [];
+get_painted_tree(Tid, {Tips, Subtips}, MaxLength) ->
+	{BestHeight, _} = hd(Tips),
+	MaxLength1 = min(MaxLength, BestHeight),
+
+	lists:foldl(
+		fun(TipEntry,PaintedIn) ->
+			paint_loop(PaintedIn, [], Tid, TipEntry, MaxLength1) end,
+		[], % PaintedIn0
+		[TipEntry || {_H,TipEntry} <- Tips ++ Subtips]
+	).
+
+
+paint_loop(Painted, Acc, _Tid, {Hash,_,_,_}=_NotForkPoint, 1) ->
+	% which should be stem
+	Acc1 = [Hash|Acc],
+	Painted ++ lists:zip(
+		Acc1,
+		[{0,undefined,H} || H <- lists:seq(1,length(Acc1))]);
+
+paint_loop(Painted, Acc, Tid, {Hash,_,PrevHash,_}=_NotForkPoint, Hight) ->
+
+	case proplists:get_value(PrevHash, Painted) of
+		undefined ->
+			[PrevEntry] = ets:lookup(Tid, PrevHash),
+			paint_loop(Painted, [Hash|Acc], Tid, PrevEntry, Hight-1);
+		{BranchLevel,_ForkPointHash,_Hight} ->
+			Acc1 = [Hash|Acc],
+			Painted ++ lists:zip(
+				Acc1,
+				[{BranchLevel+1,PrevHash,H}
+					|| H <- lists:seq(1,length(Acc1))])
 	end.
 
 
@@ -450,9 +507,9 @@ remove_entry_from_the_tree({Hash,_,PrevHash,NextHashes}=Entry, S) ->
 				Leaves1}
 	end,
 
-	Tips = find_tips(Tid, Leaves2, GenesisBlockHash),
+	{Tips,Subtips} = find_tips(Tid, Leaves2, GenesisBlockHash),
 
-	S#state{roots=Roots2, leaves=Leaves2, tips=Tips}.
+	S#state{roots=Roots2, leaves=Leaves2, tips=Tips, subtips=Subtips}.
 
 
 load_entries_from_file(S) ->
@@ -741,6 +798,54 @@ exponentially_sampled_hashes_test() ->
 		[100,99,98,96,94,92,90,88,86,84,82,80,77,74,71,68,65,61,57,53,48,43,
 			38,32,26,19,12,4],
 		exponentially_sampled_hashes(TidTree,{100,TipEntry},{0.75,0.08})).
+
+get_painted_tree_test() ->
+	TidTree = ets:new(tree,[]),
+	[ets:insert_new(TidTree, E) || E <-
+		[
+			{"A",0,"B",[]},
+			{"B",0,"C",["A"]},
+			{"C",0,"D",["B"]},
+			{"D",0,"E",["C"]},
+			{"E",0,"F",["D","J"]},
+			{"F",0,"G",["E"]},
+			{"G",0,"H",["F"]},
+			{"H",0,0,  ["G"]},
+			{"I",0,"C",[]},
+			{"J",0,"E",["K"]},
+			{"K",0,"J",["L","M"]},
+			{"L",0,"K",[]},
+			{"M",0,"K",[]}
+		]
+	],
+	Tips = [{8,{"A",0,"B",[]}}],
+	Subtips =
+		[
+			{7,{"I",0,"C",[]}},
+			{7,{"L",0,"K",[]}},
+			{7,{"M",0,"K",[]}}
+		],
+		
+	Painted = get_painted_tree(TidTree, {Tips,Subtips}, 8),
+
+	?assertEqual(
+		[
+			{"H",{0,undefined,1}},
+			{"G",{0,undefined,2}},
+			{"F",{0,undefined,3}},
+			{"E",{0,undefined,4}},
+			{"D",{0,undefined,5}},
+			{"C",{0,undefined,6}},
+			{"B",{0,undefined,7}},
+			{"A",{0,undefined,8}},
+			{"I",{1,"C",1}},
+			{"J",{1,"E",1}},
+			{"K",{1,"E",2}},
+			{"L",{1,"E",3}},
+			{"M",{2,"K",1}}
+		],
+		Painted).
+
 
 -endif.
 

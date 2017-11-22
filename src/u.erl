@@ -5,6 +5,8 @@
 
 -compile(export_all).
 
+-include_lib("eunit/include/eunit.hrl").
+
 
 %% Boolean
 %%
@@ -140,4 +142,35 @@ take_until(Elem, List) ->
 			lists:takewhile(fun(E)-> E=/=Elem end, List) ++ [Elem]
 	end.
 
+
+gather_by(ClassifyFunc, List) when is_list(List) ->
+	CList = [{ClassifyFunc(V), V} || V <- List],
+
+	gather_by_loop([], CList).
+		
+
+gather_by_loop(Acc,[]) -> lists:reverse(Acc);
+gather_by_loop(Acc, [{C0,_V}|_T]=CList) ->
+	{LV,LE} = lists:unzip([{V,E} || {C,V}=E <- CList, C=:=C0]),
+	
+	gather_by_loop([LV|Acc], CList -- LE).
+
+
+
+-ifdef(EUNIT).
+
+gather_by_test_() ->
+	[
+		?_assertEqual([[1,3,5],[2,4]],
+			gather_by(fun(V) -> V rem 2 == 1 end, [1,2,3,4,5])),
+		?_assertEqual([[1,3,5],[2,4]],
+			gather_by(fun(V) -> V rem 2 == 0 end, [1,2,3,4,5])),
+		?_assertEqual([[1,3,5],[2,4]],
+			gather_by(fun(V) -> V rem 2 end, [1,2,3,4,5])),
+		?_assertEqual([[{a,1},{a,2}],[{b,1},{b,3}],[{d,1}]],
+			gather_by(fun({First,_}) -> First end,
+				[{a,1},{b,1},{a,2},{d,1},{b,3}]))
+	].
+
+-endif.
 

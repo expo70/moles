@@ -58,7 +58,7 @@ init([NetType]) ->
 		type => worker,
 		modules => [acceptor]},
 	ChildSpec7 = #{id => view,
-		start => {view, start_link, [{0,0}]}, %FIXME
+		start => {view, start_link, [[0,0]]}, %FIXME: maybe add set_coord()
 		restart => permanent,
 		shutdown => 3000, %timeout value
 		type => worker,
