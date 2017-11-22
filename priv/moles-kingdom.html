@@ -165,6 +165,14 @@ window.onload = function() {
 			console.log("WebSocket.onopen()");
 
 			conn.send(JSON.stringify(subscription_msg));
+
+			// heartbeat to keep the connection alive
+			setInterval(function(){
+					if(conn.readyState == WebSocket.OPEN)
+					{
+						conn.send(JSON.stringify({ cmd: "heartbeat" }));
+					}
+				}, 30*1000);
 		}
 		conn.onmessage = function(event)
 		{
