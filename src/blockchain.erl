@@ -34,12 +34,15 @@
 -define(HEADER_SIZE, 81). % 80 + byte_size(var_int(0))
 -define(TREE_UPDATE_INTERVAL, 10*1000).
 -define(HEADERS_FILE_NAME, "headers.dat").
+-define(TREE_FILE_NAME, "tree.ets").
+-define(TREE_SUB_FILE_NAME, "tree_sub.ets").
 
 
 -record(state,
 	{
 		net_type,
 		headers_file_path,
+		tree_file_path,
 		new_entries,
 		tid_tree,
 		roots,
@@ -96,20 +99,67 @@ init([NetType]) ->
 	
 	ok = filelib:ensure_dir(HeadersFileDir++'/'),
 	HeadersFilePath = filename:join(HeadersFileDir, ?HEADERS_FILE_NAME),
+	TreeFilePath = filename:join(HeadersFileDir, ?TREE_FILE_NAME),
+	TreeSubFilePath = filename:join(HeadersFileDir, ?TREE_SUB_FILE_NAME),
 
 	InitialState = #state{
 			net_type = NetType,
 			headers_file_path = HeadersFilePath,
+			tree_file_path = {TreeFilePath, TreeSubFilePath},
 			new_entries = [],
 			tips_jobs = [],
 			exp_sampling_jobs = []
 		},
 	
-	InitialState1 = load_entries_from_file(InitialState),
-	% blocking
-	{_, InitialState2} = handle_info(update_tree, InitialState1),
-	%erlang:send_after(?TREE_UPDATE_INTERVAL, self(), update_tree),
+	case u:file_existsQ(TreeFilePath) of
+		false -> 
+			InitialState1 = load_entries_from_file(InitialState),
+			% blocking
+			{_, InitialState2} = handle_info(update_tree, InitialState1);
+			%erlang:send_after(?TREE_UPDATE_INTERVAL, self(), update_tree),
+		true ->
+			InitialState2 = load_tree_structure(InitialState),
+			
+			io:format("blockchain:load_tree_structure finished.~n",[]),
+			Tid = InitialState2#state.tid_tree,
+			Tips = InitialState2#state.tips,
+			Subtips = InitialState2#state.subtips,
+			view:update_blockchain(
+				get_painted_tree(Tid, {Tips,Subtips}, 10))
+	end,
+			
 	{ok, InitialState2}.
+
+
+load_tree_structure(S) ->
+	{TreeFilePath, TreeSubFilePath} = S#state.tree_file_path,
+
+	{ok,Tid   } = ets:file2tab(TreeFilePath),
+	{ok,TidSub} = ets:file2tab(TreeSubFilePath),
+	
+	[{_,Roots}]   = ets:lookup(TidSub, roots),
+	[{_,Leaves}]  = ets:lookup(TidSub, leaves),
+	[{_,Tips}]    = ets:lookup(TidSub, tips),
+	[{_,Subtips}] = ets:lookup(TidSub, subtips),
+
+	S#state{tid_tree=Tid,
+		roots=Roots, leaves=Leaves, tips=Tips, subtips=Subtips}.
+
+
+save_tree_structure(S) ->
+	{TreeFilePath, TreeSubFilePath} = S#state.tree_file_path,
+
+	Tid    = S#state.tid_tree,
+	TidSub = ets:new(tree_sub, []),
+	true = ets:insert_new(TidSub, {roots, S#state.roots}),
+	true = ets:insert_new(TidSub, {leaves, S#state.leaves}),
+	true = ets:insert_new(TidSub, {tips, S#state.tips}),
+	true = ets:insert_new(TidSub, {subtips, S#state.subtips}),
+
+	ok = ets:tab2file(Tid, TreeFilePath),
+	ok = ets:tab2file(TidSub, TreeSubFilePath),
+
+	S.
 
 
 handle_call({collect_getheaders_hashes, MaxDepth}, _From, S) ->
@@ -311,8 +361,9 @@ initialize_tree(Entries, S) ->
 	view:update_blockchain(
 		get_painted_tree(Tid, {Tips,Subtips}, 10)),
 
-	S#state{tid_tree=Tid, roots=Roots, leaves=Leaves,
-		tips=Tips, subtips=Subtips}.
+	NewState = S#state{tid_tree=Tid, roots=Roots, leaves=Leaves,
+		tips=Tips, subtips=Subtips},
+	save_tree_structure(NewState).
 
 
 % floating (non-connected) entry is added into AccIn
@@ -360,7 +411,10 @@ update_tree(NewEntries, S) ->
 	view:update_blockchain(
 		get_painted_tree(Tid, {Tips,Subtips}, 10)),
 
-	S#state{roots=Roots1, leaves=Leaves1, tips=Tips, subtips=Subtips}.
+	NewState =
+		S#state{roots=Roots1, leaves=Leaves1, tips=Tips, subtips=Subtips},
+	save_tree_structure(NewState).
+
 
 
 find_leaves(Tid) ->
@@ -513,8 +567,14 @@ remove_entry_from_the_tree({Hash,_,PrevHash,NextHashes}=Entry, S) ->
 	end,
 
 	{Tips,Subtips} = find_tips(Tid, Leaves2, GenesisBlockHash),
+	io:format("blockchain:remove_entry_from_tree finished.~n",[]),
+	view:update_blockchain(
+		get_painted_tree(Tid, {Tips,Subtips}, 10)),
 
-	S#state{roots=Roots2, leaves=Leaves2, tips=Tips, subtips=Subtips}.
+	NewState =
+		S#state{roots=Roots2, leaves=Leaves2, tips=Tips, subtips=Subtips},
+	save_tree_structure(NewState).
+
 
 
 load_entries_from_file(S) ->
