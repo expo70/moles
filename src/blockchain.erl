@@ -308,6 +308,9 @@ initialize_tree(Entries, S) ->
 	{Tips, Subtips} = find_tips(Tid, Leaves, GenesisBlockHash),
 
 	io:format("blockchain:initialize_tree finished.~n",[]),
+	view:update_blockchain(
+		get_painted_tree(Tid, {Tips,Subtips}, 10)),
+
 	S#state{tid_tree=Tid, roots=Roots, leaves=Leaves,
 		tips=Tips, subtips=Subtips}.
 
@@ -354,6 +357,8 @@ update_tree(NewEntries, S) ->
 		Leaves ++ NewEntries),
 
 	{Tips, Subtips} = find_tips(Tid, Leaves1, GenesisBlockHash),
+	view:update_blockchain(
+		get_painted_tree(Tid, {Tips,Subtips}, 10)),
 
 	S#state{roots=Roots1, leaves=Leaves1, tips=Tips, subtips=Subtips}.
 

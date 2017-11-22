@@ -66,13 +66,13 @@ init([NetType]) ->
 	
 	{ok,{SupFlags,
 		[
+		ChildSpec7,
 		ChildSpec0,
 		ChildSpec1,
 		ChildSpec2,
 		ChildSpec3,
 		ChildSpec4,
 		ChildSpec5,
-		ChildSpec6,
-		ChildSpec7
+		ChildSpec6
 		]}}.
 

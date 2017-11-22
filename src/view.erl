@@ -9,7 +9,7 @@
 
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2]).
 
--export([start_link/1, update/1]).
+-export([start_link/1, update_blockchain/1]).
 
 -record(state,
 	{
@@ -18,23 +18,38 @@
 
 
 
-
+%% ----------------------------------------------------------------------------
+%% API
+%% ----------------------------------------------------------------------------
 start_link(Coordinate) ->
+	io:format("view:start_link with Coordinate = ~p~n", [Coordinate]),
 	Args = [Coordinate],
 	gen_server:start_link({local,?MODULE}, ?MODULE, Args, []).
 
 
 %% mole
-%%	update_tree
+%%	update_blockchain
 %%	get_tx
 %%	get_block
 %%	create_block
 %%	send_tx
 %%	send_block
-update(What) ->
+update_blockchain(PaintedTree) ->
+	io:format("view:update_blockchain~n",[]),
+	View = create_blockchain_view(PaintedTree),
+
+	%% prepare for JSON conversion
+	%% change hash to string
+	%% {X,Y}-coordinates to list
+	View1 = maps:from_list([{list_to_binary(u:bin_to_hexstr(Hash,"",little)),[X,Y]} || {Hash,{X,Y}} <- View]),
+
+	What = #{ cmd => update_blockchain, view => View1 },
 	gen_server:cast(?MODULE, {update, What}).
 
 
+%% ----------------------------------------------------------------------------
+%% gen_server callback
+%% ----------------------------------------------------------------------------
 init([Coordinate]) ->
 	InitialState = #state{
 		unique_name = Coordinate
@@ -63,7 +78,10 @@ handle_info(_Info, S) ->
 %% "What" message is converted into JSON in ws_handler.erl by using jsone
 %% module and sent through websocket into subscribed web browsers.
 publish_view(What, S) ->
-	ebus:pub(S#state.unique_name, What),
+	Topic = S#state.unique_name,
+	
+	io:format("try to pub to topic: ~p~n", [Topic]),
+	ok = ebus:pub(Topic, What),
 
 	S.
 

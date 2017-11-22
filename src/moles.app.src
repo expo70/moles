@@ -5,7 +5,8 @@
   {mod, { moles_app, [testnet]}},
   {applications,
    [kernel,
-    stdlib
+    stdlib,
+	ebus
    ]},
   {env,[{my_global_address, {202,218,2,35}}, {my_local_address, {127,0,0,1}}]},
   {modules, []},
