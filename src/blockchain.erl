@@ -116,7 +116,6 @@ init([NetType]) ->
 			InitialState1 = load_entries_from_file(InitialState),
 			% blocking
 			{_, InitialState2} = handle_info(update_tree, InitialState1);
-			%erlang:send_after(?TREE_UPDATE_INTERVAL, self(), update_tree),
 		true ->
 			InitialState2 = load_tree_structure(InitialState),
 			
@@ -312,7 +311,13 @@ handle_info(update_tree, S) ->
 	end,
 
 	S2 = case NewEntriesNonError of
-		[ ] -> S#state{new_entries=[]};
+		[ ] ->
+			case S#state.tid_tree of
+				undefined -> % this is called in running for the first time
+					S1 = initialize_tree([], S),
+					S1;
+				_ -> S#state{new_entries=[]}
+			end;
 		 _  ->
 		 	case S#state.tid_tree of
 				undefined -> % do initialize
@@ -471,7 +476,7 @@ find_tips(Tid, Leaves, GenesisBlockHash) ->
 		|| {L,{Height,{_,_,PrevHash,_}}} 
 		<- RootInfos, PrevHash=:=GenesisBlockHash],
 	case RootHeights of
-		[ ] -> [];
+		[ ] -> {[],[]};
 		 _  ->
 			SortedRootHeights = lists:sort(fun({H1,_},{H2,_})-> H1 >= H2 end, 
 				RootHeights),
@@ -778,6 +783,9 @@ exponential_sampling_loop(Acc, Hash, N, {A,P}, 1, TidTree) ->
 			exponential_sampling_loop([Hash|Acc], PrevHash, N1, {A,P}, Gap,
 				TidTree)
 	end;
+exponential_sampling_loop(Acc, _Hash, _N, {_A,_P}, Gap, _TidTree)
+	when Gap > ?MAX_HEADERS_COUNT -> % for limiting
+		lists:reverse(Acc);
 exponential_sampling_loop(Acc, Hash, N, {A,P}, Gap, TidTree) ->
 	case ets:lookup(TidTree,Hash) of
 		[] -> lists:reverse(Acc);
