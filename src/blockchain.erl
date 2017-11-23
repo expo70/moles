@@ -227,14 +227,12 @@ handle_call({get_proposed_headers, PeerTreeHashes, StopHash},
 		 	Entries =
 		 	case find_first_common_entry(PeerTreeHashes, Tid) of
 				not_found ->
-					?debugMsg("not_found"),
 					{_H, TipEntry} = hd(Tips),
 					NetType = S#state.net_type,
 					GenesisBlockHash = rules:genesis_block_hash(NetType),
 					lists:reverse(go_down_tree_before(TipEntry, 
 						GenesisBlockHash, Tid));
 				Entry ->
-					?debugFmt("Entry = ~p~n",[Entry]),
 					{_H, TipEntry} = hd(Tips),
 					% function without the limit of search range takes
 					% too much time in some situations. So we use with-limit
@@ -253,7 +251,6 @@ handle_call({get_proposed_headers, PeerTreeHashes, StopHash},
 					Entries1)
 			end,
 
-			?debugMsg("loading headers from file"),
 			HeadersPayload = load_headers_from_file(indexes(Entries2), S),
 			
 			Tips1 = u:list_rotate_left1(Tips),
@@ -315,7 +312,7 @@ handle_info(update_tree, S) ->
 	end,
 
 	S2 = case NewEntriesNonError of
-		[ ] -> S;
+		[ ] -> S#state{new_entries=[]};
 		 _  ->
 		 	case S#state.tid_tree of
 				undefined -> % do initialize
@@ -686,7 +683,6 @@ save_header_func(HeaderBin, Origin, {F,Tid}) ->
 
 climb_tree_until({_Hash,_Index,_PrevHash,NextHashes}=_Start, Goal,
 	TidTree) ->
-	?debugMsg("climb_tree_until"),
 	
 	try go_next_loop([],NextHashes,Goal,TidTree) of
 		_NotFound -> []
@@ -708,7 +704,6 @@ go_next_loop(Acc, [NextHash|T], {GoalHash,_,_,_}=Goal, TidTree) ->
 
 climb_tree_until_with_limit({_Hash,_Index,_PrevHash,NextHashes}=_Start, Goal,
 	TidTree, Limit) when is_integer(Limit) andalso Limit>0 ->
-	?debugMsg("climb_tree_until_with_limit"),
 	
 	try go_next_loop_with_limit([],NextHashes,Goal,TidTree,Limit) of
 		_NotFound -> []
@@ -732,7 +727,6 @@ go_next_loop_with_limit(Acc, [NextHash|T], {GoalHash,_,_,_}=Goal, TidTree,
 
 
 find_first_common_entry(Hashes, TidTree) ->
-	?debugFmt("blockchain:find_first_common_entry~n",[]),
 	try find_first_loop(Hashes, TidTree) of
 		_NotFound -> not_found
 	catch
@@ -749,7 +743,6 @@ find_first_loop([Hash|T], TidTree) ->
 
 go_down_tree_before({_Hash,_Index,PrevHash,_NextHashes}=Start, GoalHash,
 	TidTree) ->
-	?debugFmt("blockchain:go_down_tree_before~n",[]),
 	go_prev_loop([Start], PrevHash, GoalHash, TidTree).
 
 go_prev_loop(Acc, PrevHash, GoalHash, TidTree) ->

@@ -123,14 +123,20 @@ message(NetType, Command, Payload) ->
 
 
 %% net_addr
-%% for IPv4-mapped IPv6 address
-net_addr({A,B,C,D}, Port, {ServicesType, MyProtocolVersion}) ->
+net_addr(IP_Address, Port, {ServicesType, MyProtocolVersion}) ->
 	TimeNow = unix_timestamp(),
-	net_addr(TimeNow, {A,B,C,D}, Port, {ServicesType, MyProtocolVersion}).
+	net_addr(TimeNow, IP_Address, Port, {ServicesType, MyProtocolVersion}).
 	
-net_addr(Time, {A,B,C,D}, Port, {ServicesType, MyProtocolVersion}) ->
+net_addr(Time, IP_Address, Port, {ServicesType, MyProtocolVersion}) ->
 	Services = services(ServicesType),
-	IP6Address = <<0:(8*10), 16#FF, 16#FF, A:8, B:8, C:8, D:8>>,
+	IP6Address =
+	case IP_Address of
+		{A,B,C,D} -> % for IPv4-mapped IPv6 address
+			<<0:(8*10), 16#FF, 16#FF, A:8, B:8, C:8, D:8>>;
+		{A,B,C,D,E,F,G,H} ->
+			<<A:16, B:16, C:16, D:16, E:16, F:16, G:16, H:16>>
+	end,
+
 	if
 		MyProtocolVersion >= 31402 -> <<Time:32/little, Services:64/little, IP6Address:16/binary, Port:16/big>>;
 		MyProtocolVersion <  31402 -> <<                Services:64/little, IP6Address:16/binary, Port:16/big>>

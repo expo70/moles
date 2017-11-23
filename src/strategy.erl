@@ -21,7 +21,7 @@
 %% gen_server callbak
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2]).
 
--define(CHECK_N_PEERS_INTERVAL, 60*1000).
+-define(CHECK_N_PEERS_INTERVAL, 30*1000).
 
 
 %% ----------------------------------------------------------------------------
