@@ -125,7 +125,9 @@ init([NetType]) ->
 			Tips = InitialState2#state.tips,
 			Subtips = InitialState2#state.subtips,
 			view:update_blockchain(
-				get_painted_tree(Tid, {Tips,Subtips}, 10))
+				get_painted_tree(Tid, {Tips,Subtips}, 10)),
+			
+			erlang:send_after(?TREE_UPDATE_INTERVAL, self(), update_tree)
 	end,
 			
 	{ok, InitialState2}.
@@ -225,16 +227,25 @@ handle_call({get_proposed_headers, PeerTreeHashes, StopHash},
 		 	Entries =
 		 	case find_first_common_entry(PeerTreeHashes, Tid) of
 				not_found ->
+					?debugMsg("not_found"),
 					{_H, TipEntry} = hd(Tips),
 					NetType = S#state.net_type,
 					GenesisBlockHash = rules:genesis_block_hash(NetType),
 					lists:reverse(go_down_tree_before(TipEntry, 
 						GenesisBlockHash, Tid));
 				Entry ->
+					?debugFmt("Entry = ~p~n",[Entry]),
 					{_H, TipEntry} = hd(Tips),
-					climb_tree_until(Entry, TipEntry, Tid)
+					% function without the limit of search range takes
+					% too much time in some situations. So we use with-limit
+					% function. Note that this may result in returning a
+					% tree entries that do not reside in the main stem of
+					% the tree.
+					climb_tree_until_with_limit(Entry, TipEntry, Tid,
+						?MAX_HEADERS_COUNT)
 			end,
-			Entries1 = lists:sublist(Entries,?MAX_HEADERS_COUNT),
+			%Entries1 = lists:sublist(Entries,?MAX_HEADERS_COUNT),
+			Entries1 = Entries, % trunction is not required for ..._with_limit.
 			Entries2 =
 			case StopHash of
 				?HASH256_ZERO_BIN -> Entries1;
@@ -242,6 +253,7 @@ handle_call({get_proposed_headers, PeerTreeHashes, StopHash},
 					Entries1)
 			end,
 
+			?debugMsg("loading headers from file"),
 			HeadersPayload = load_headers_from_file(indexes(Entries2), S),
 			
 			Tips1 = u:list_rotate_left1(Tips),
@@ -674,6 +686,7 @@ save_header_func(HeaderBin, Origin, {F,Tid}) ->
 
 climb_tree_until({_Hash,_Index,_PrevHash,NextHashes}=_Start, Goal,
 	TidTree) ->
+	?debugMsg("climb_tree_until"),
 	
 	try go_next_loop([],NextHashes,Goal,TidTree) of
 		_NotFound -> []
@@ -693,7 +706,33 @@ go_next_loop(Acc, [NextHash|T], {GoalHash,_,_,_}=Goal, TidTree) ->
 	end.
 
 
+climb_tree_until_with_limit({_Hash,_Index,_PrevHash,NextHashes}=_Start, Goal,
+	TidTree, Limit) when is_integer(Limit) andalso Limit>0 ->
+	?debugMsg("climb_tree_until_with_limit"),
+	
+	try go_next_loop_with_limit([],NextHashes,Goal,TidTree,Limit) of
+		_NotFound -> []
+	catch
+		throw:Acc -> lists:reverse(Acc)
+	end.
+
+go_next_loop_with_limit(Acc,[], _, _, _) -> Acc;
+go_next_loop_with_limit(Acc, _, _, _, 0) -> throw(Acc);
+go_next_loop_with_limit(Acc, [NextHash|T], {GoalHash,_,_,_}=Goal, TidTree,
+	Limit) ->
+	case NextHash of
+		GoalHash -> throw([Goal|Acc]);
+		_ ->
+			[{NextHash, _,_, NextNextHashes}=Entry]
+				= ets:lookup(TidTree, NextHash),
+			go_next_loop_with_limit([Entry|Acc], NextNextHashes, Goal,
+				TidTree, Limit-1),
+			go_next_loop_with_limit(Acc, T, Goal, TidTree, Limit)
+	end.
+
+
 find_first_common_entry(Hashes, TidTree) ->
+	?debugFmt("blockchain:find_first_common_entry~n",[]),
 	try find_first_loop(Hashes, TidTree) of
 		_NotFound -> not_found
 	catch
@@ -710,6 +749,7 @@ find_first_loop([Hash|T], TidTree) ->
 
 go_down_tree_before({_Hash,_Index,PrevHash,_NextHashes}=Start, GoalHash,
 	TidTree) ->
+	?debugFmt("blockchain:go_down_tree_before~n",[]),
 	go_prev_loop([Start], PrevHash, GoalHash, TidTree).
 
 go_prev_loop(Acc, PrevHash, GoalHash, TidTree) ->
@@ -911,6 +951,65 @@ get_painted_tree_test() ->
 		],
 		Painted).
 
+get_proposed_headers_test_func() ->
+	
+	InitialState = #state{
+			net_type = testnet,
+			headers_file_path = undefined,
+			tree_file_path = {"../test-data/tree.ets",
+				"../test-data/tree_sub.ets"},
+			new_entries = [],
+			tips_jobs = [],
+			exp_sampling_jobs = []
+		},
+	S = load_tree_structure(InitialState),
+
+	GetHeadersHashStrs =
+	[
+	"71a060a0db039b1b0959c05e823a7a23f1a681792758b4e561e2256f00000000",
+	"c34ab546fb6164dc8455ef6b4c6be0b4d9f6b06a7b2b909b38b5092d00000000",
+	"de5b260ed3baf747b4b6b90a73d4ed29f3d6b4dc1ee8548a3b611fe300000000",
+	"0359f6957915f5cc0f50e106dc9a0df72189762d01b3f0696605adf900000000",
+	"837003a924ef904cc26a553c8471e6da16048ac8ed724b19b21de38800000000",
+	"d9568362378703af3aa1c5effc8f26263d242f96174f701cdf50adae00000000",
+	"3aba031f2eed066e62044aae543f930c627e3c0f85ff1dd0bfa720da00000000",
+	"41fe5438905e78898f75191b7967976b416ecc09d3763135d94e839f00000000",
+	"081a28f384d05ad8d2a6fd2d758785b27faea569d8f7a64bde1bd53200000000",
+	"b64c59375a1adf97389899a62f0ec0979c02f8f71fbb5662fe36659a00000000",
+	"bd6666e2411455a59e01645d196df41babf34d09d9dbfa1b1809000000000000",
+	"043588b14200ddaf2c0ecca7afc37df083fbd994f51f1b5add2a000000000000",
+	"63b841da75d724115d31621a42c5a0bee7b32ca96bb929e38c0e000000000000",
+	"bacd92546309826eea8b6e25f312a2677e95b850a3fd3ce2887d96d100000000",
+	"a2c9ad2ed00b08beeb313a4f36f6d0071ae06f5847a2e4a44611000000000000",
+	"94583ec6b661601884982a23087f86e89985a0fc9f2043465d0e52f900000000",
+	"725b9b5bf8751110de083a12b5901134c8c5e3ac072bb69e568a63e100000000",
+	"86ca5a0f8c3d3fd38f646e80ca0cde7a2371a348f8e948f8ffd118dc00000000",
+	"28c83aa906f3b143374de067582cb29534c129486fe4854e8ffe68c900000000",
+	"bcbf0f5c9f8cbfa77705ba053a908f2cc0603b2b6b1015700736000000000000",
+	"f89fcf06195dde3120e1645ee3334b332857d55b5195267cbd85a26a00000000",
+	"4d8eaea94325c9559bd774de621343b8a765a2d2e2423617db00000000000000",
+	"8ad187d1cb9528cee2b22d807beb0d0965880349340fbf9a9fe0020000000000",
+	"597a5be5dba1ddf2fe79a8208e803ffe7a7d29b26dd4a01663f12f0000000000",
+	"42a7410b427744d655b3f58e3c6546395b12ac3189107b478b38543a00000000",
+	"a72fb94dc84b388b0dca6090df39d59d557899beffb6574c0d4f000000000000",
+	"4923e67cab68b207ea2f79fb3556832e465f95a3cb3975818d62010000000000",
+	"8dcde6f6a9d19d8284c040119ccc5238efd8546c0052572aecd50d0000000000",
+	"70172a68bf4485a86428f4b01d06b9156071219f491462119d72b10000000000",
+	"a8ba48b4a9e8b64b3c7d690317e81a61c61f5e38db4a56bb5c0da00000000000",
+	"24f202424c3709f5cd159ff7c9ade52ab1ee49f0b1102f86d579409e00000000",
+	"43497fd7f826957108f4a30fd9cec3aeba79972084e90ead01ea330900000000"],
+	GetHeadersHashes = [protocol:hash(H) || H <- GetHeadersHashStrs],
+	StopHash = ?HASH256_ZERO_BIN,
+
+	Reply = handle_call({get_proposed_headers, GetHeadersHashes, StopHash},
+		undefined, S),
+	?debugFmt("get_proposed_headers result = ~p~n",[Reply]),
+	ok.
+	
+%get_proposed_headers_test_() ->
+%	[
+%		{timeout, 20, fun get_proposed_headers_test_func/0}
+%	].
 
 -endif.
 
