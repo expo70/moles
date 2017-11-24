@@ -49,7 +49,8 @@
 		tips,
 		subtips,
 		tips_jobs,
-		exp_sampling_jobs
+		exp_sampling_jobs,
+		check_integrity_on_startup
 	}).
 
 
@@ -108,7 +109,8 @@ init([NetType]) ->
 			tid_tree = ets:new(blockchain_index,[]),
 			new_entries = [],
 			tips_jobs = [],
-			exp_sampling_jobs = []
+			exp_sampling_jobs = [],
+			check_integrity_on_startup = false
 		},
 	
 	case u:file_existsQ(TreeFilePath) of
@@ -126,9 +128,14 @@ init([NetType]) ->
 			view:update_blockchain(
 				get_painted_tree(Tid, {Tips,Subtips}, 10))
 	end,
-			
-	erlang:send_after(?TREE_UPDATE_INTERVAL, self(), update_tree),
-	{ok, InitialState1}.
+	
+	case InitialState1#state.check_integrity_on_startup 
+		andalso not check_integrity_of_index(InitialState1) of
+		true  -> {stop, bad_index};
+		false ->
+			erlang:send_after(?TREE_UPDATE_INTERVAL, self(), update_tree),
+			{ok, InitialState1}
+	end.
 
 
 handle_call({collect_getheaders_hashes, MaxDepth}, _From, S) ->
@@ -234,7 +241,8 @@ handle_cast({create_getheaders_job_on_update, JobType, JobTarget}, S) ->
 
 
 handle_info(update_tree, S) ->
-	NewEntries = lists:reverse(S#state.new_entries),
+	%NewEntries = lists:reverse(S#state.new_entries),
+	NewEntries = S#state.new_entries,
 
 	{NewEntriesNonError,NewEntriesWithError} =
 	lists:partition(fun(X) ->
@@ -597,6 +605,39 @@ load_headers_from_file(Indexes, S) ->
 	file:close(F),
 
 	Payload.
+
+
+check_integrity_of_index(S) ->
+	Tid = S#state.tid_tree,
+
+	try
+		ets:foldl(fun({Hash,Index,_,_}=Entry,_AccIn) ->
+			begin
+			Payloads = load_headers_from_file([Index],S),
+			{1, Payload} = protocol:read_var_int(Payloads),
+			
+			case protocol:read_block_header(Payload)  of
+				{{HashStr,_,_,_,_,_,_,0},<<>>} -> ok;
+				_ ->
+					HashStr = "", % dummy
+					throw({bad_index,Entry})
+			end,
+			
+			case protocol:hash(HashStr) of
+				Hash  -> ok;
+				_ -> throw({bad_index,Entry})
+			end
+			
+			end
+			end,
+			undefined, Tid),
+			
+		true
+	catch
+		throw:Reason ->
+			io:format("check_integrity_of_index failed at ~p~n",[Reason]),
+			false
+	end.
 
 
 for_each_header_chunk_from_bin(Acc, _, <<>>, _, _) -> lists:reverse(Acc);

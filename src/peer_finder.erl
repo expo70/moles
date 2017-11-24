@@ -91,12 +91,25 @@ init([NetType]) ->
 %% 
 %% Priority = new | 
 %% 
-handle_call({request_peer, new=_Priority}, _From, S) ->
+handle_call({request_peer, Priority}, _From, S) ->
 	Ref = S#state.ref_peers,
 	TidPeersInUse = S#state.tid_peers_in_use,
 
-	%FIXME, now only supports Priority = new
-	Matches = dets:match(Ref, {'$1','_','_','_',{new,'_'},'_','_','_','_'}),
+	Matches =
+	case Priority of
+		new -> 
+			dets:match(Ref, {'$1','_','_','_',{new,'_'},'_','_','_','_'});
+		newer ->
+			Select = dets:select(Ref,
+				[{
+				{'$1','_','_','_','$2','_','_','_','_'},
+				[{is_integer,'$2'}],
+				[{{'$2','$1'}}]
+				}]),
+			[IP || {_Time,IP} <- lists:sort(fun({T1,_},{T2,_}) -> T1>=T2 end,
+				Select)] % newer the better
+	end,
+
 	IPs = [IP || [IP] <- Matches, not ets:member(TidPeersInUse, IP)],
 
 	case IPs of
