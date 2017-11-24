@@ -238,7 +238,7 @@ handle_cast({got_addr, NetAddrs, Origin}, S) ->
 			{addr, {AdvertisedTime, ServicesFlag, IP_Address, Port}}
 		end
 		|| {_,_,IP_Address,_} <- NetAddrs1],
-	lists:foreach(fun(J) -> jobs:add_job({{except,Origin},J,60*10}) end,
+	lists:foreach(fun(J) -> jobs:add_job({{except,Origin},J,60}) end,
 		JobSpecs),
 
 	{noreply, S};

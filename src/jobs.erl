@@ -46,46 +46,48 @@ init([]) ->
 	{ok, InitialState}.
 
 
+%% Priority: all > IP_Address > any
 %%
 %% Entry = {Target, JobSpec, ExpirationTime, Stamps}
 handle_call({find_job, IP_Address}, _From, S) ->
 	Tid = S#state.tid_jobs,
 	
-	Job1 =
-	case ets:lookup(Tid, IP_Address) of
-		[Job|_T] ->
-			ets:delete_object(Tid, Job),
-			Job;
-		[] ->
-			case ets:lookup(Tid, all) of
-				[Job|_T] ->
-					{all, JobSpec, ExpirationTime, Stamps} = Job,
-					case lists:member(IP_Address, Stamps) of
-						true ->
-							case ets:lookup(Tid, any) of
-								[Job0|_T] ->
-									ets:delete_object(Tid, Job0),
-									Job0;
-								[] -> not_available
-							end;
-						false ->
-							ets:delete_object(Tid, Job),
-							UpdatedJob = {all, JobSpec, ExpirationTime,
-								[IP_Address|Stamps]},
-							ets:insert_new(Tid, UpdatedJob),
-							Job
-					end;
-				[] ->
-					case ets:lookup(Tid, any) of
-						[Job|_T] ->
-							ets:delete_object(Tid, Job),
-							Job;
-						[] -> not_available
-					end
-			end
+	case ets:lookup(Tid, all) of
+		[Job|_] ->
+			{all, JobSpec, ExpirationTime, Stamps} = Job,
+			case lists:member(IP_Address, Stamps) of
+				true -> Job1 = not_available;
+				false ->
+					ets:delete_object(Tid, Job),
+					UpdatedJob = {all, JobSpec, ExpirationTime,
+					[IP_Address|Stamps]},
+					ets:insert_new(Tid, UpdatedJob),
+					Job1 = Job
+			end;
+		[] -> Job1 = not_available
 	end,
 
-	{reply, Job1, S}.
+	case Job1 of
+		not_available ->
+			case ets:lookup(Tid, IP_Address) of
+				[Job2|_] ->
+					ets:delete_object(Tid, Job2);
+				[] -> Job2 = not_available
+			end;
+		_ -> Job2 = Job1
+	end,
+
+	case Job2 of
+		not_available ->
+			case ets:lookup(Tid, any) of
+				[Job3|_] ->
+					ets:delete_object(Tid, Job3);
+				[] -> Job3 = not_available
+			end;
+		_ -> Job3 = Job2
+	end,
+
+	{reply, Job3, S}.
 
 
 handle_cast({add_job, {{except, IP_Address},JobSpec,DurationInSec}}, S) ->

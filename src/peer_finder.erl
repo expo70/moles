@@ -102,11 +102,11 @@ handle_call({request_peer, Priority}, _From, S) ->
 		newer ->
 			Select = dets:select(Ref,
 				[{
-				{'$1','_','_','_','$2','_','_','_','_'},
+				{'$1','_','_','_','$2','_','_','_',normal},
 				[{is_integer,'$2'}],
 				[{{'$2','$1'}}]
 				}]),
-			[IP || {_Time,IP} <- lists:sort(fun({T1,_},{T2,_}) -> T1>=T2 end,
+			[[IP] || {_Time,IP} <- lists:sort(fun({T1,_},{T2,_}) -> T1>=T2 end,
 				Select)] % newer the better
 	end,
 
