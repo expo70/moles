@@ -87,7 +87,7 @@ handle_cast({add_peer, IP_Address}, S) ->
 					io:format("getheaders hashes were proposed: ~p~n",
 						[ListOfList]),
 					[jobs:add_job(
-					{IP_Address, {getheaders,Hashes}, 60}) 
+					{IP_Address, {getheaders,Hashes}, 300})
 					|| Hashes <- ListOfList]
 			end;
 		header_first ->
@@ -96,7 +96,7 @@ handle_cast({add_peer, IP_Address}, S) ->
 				not_ready -> ok;
 				Hashes ->
 					Hashes1 = lists:sublist(Hashes,?MAX_HEADERS_COUNT),
-					jobs:add_job({IP_Address, {getheaders,Hashes1}, 60})
+					jobs:add_job({IP_Address, {getheaders,Hashes1}, 300})
 			end
 	end,
 	
@@ -120,7 +120,7 @@ handle_cast({got_headers, Payload, Origin}, S) ->
 	%{Header, _} = protocol:read_block_header(Rest),
 	%io:format("\tthe first one is ~p~n",[Header]),
 
-	blockchain:save_headers(Payload, Origin),
+	blockchain:got_headers(Payload, Origin),
 	% new headers are not incorporetad into the tree until the next update_tree
 
 	if

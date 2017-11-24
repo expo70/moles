@@ -36,7 +36,10 @@ start_link(NetType) ->
 	gen_server:start_link({local, ?MODULE}, ?MODULE, Args, []).
 
 request_peer(Priority) ->
-	gen_server:call(?MODULE, {request_peer, Priority}).
+	% assigned longer call timeout value for potential calls
+	% before async-init DNS seeding finishes, which usually takes
+	% a fair amount time.
+	gen_server:call(?MODULE, {request_peer, Priority}, 15*1000).
 
 get_peer_info(IP_Address) ->
 	gen_server:call(?MODULE, {get_peer_info, IP_Address}).
@@ -82,7 +85,7 @@ init([NetType]) ->
 	},
 	
 	gen_server:cast(?MODULE, {dns_seeds, InitialStatus}),
-	{ok, not_initialized_yet}.
+	{ok, InitialStatus}.
 
 
 %% 

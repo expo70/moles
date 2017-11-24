@@ -6,6 +6,9 @@ compile:
 
 clean:
 	@$(rebar_cmd) clean
+	-@rm -rf *.dump 2>/dev/null
+	-@rm -rf src/*.dump 2>/dev/null
+	-@rm -rf src/*.beam 2>/dev/null
 
 start: compile
 	erl -name mole0@127.0.0.1 -setcookie moles -pa _build/default/lib/*/ebin -s moles_app

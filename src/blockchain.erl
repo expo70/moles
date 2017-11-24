@@ -8,7 +8,6 @@
 %% fill the gaps.
 %%
 -module(blockchain).
--compile(export_all).
 -include_lib("eunit/include/eunit.hrl").
 
 
@@ -19,7 +18,7 @@
 
 % APIs
 -export([start_link/1,
-	save_headers/2,
+	got_headers/2,
 	collect_getheaders_hashes/1,
 	collect_getheaders_hashes_exponential/1,
 	get_floating_root_prevhashes/0,
@@ -61,8 +60,8 @@ start_link(NetType) ->
 	Args = [NetType],
 	gen_server:start_link({local,?MODULE}, ?MODULE, Args, []).
 
-save_headers(HeadersPayload, Origin) ->
-	gen_server:cast(?MODULE, {save_headers, HeadersPayload, Origin}).
+got_headers(HeadersPayload, Origin) ->
+	gen_server:cast(?MODULE, {got_headers, HeadersPayload, Origin}).
 
 collect_getheaders_hashes(MaxDepth) ->
 	gen_server:call(?MODULE, {collect_getheaders_hashes, MaxDepth}).
@@ -106,6 +105,7 @@ init([NetType]) ->
 			net_type = NetType,
 			headers_file_path = HeadersFilePath,
 			tree_file_path = {TreeFilePath, TreeSubFilePath},
+			tid_tree = ets:new(blockchain_index,[]),
 			new_entries = [],
 			tips_jobs = [],
 			exp_sampling_jobs = []
@@ -113,110 +113,63 @@ init([NetType]) ->
 	
 	case u:file_existsQ(TreeFilePath) of
 		false -> 
-			InitialState1 = load_entries_from_file(InitialState),
+			Entries = load_entries_from_file(HeadersFilePath),
 			% blocking
-			{_, InitialState2} = handle_info(update_tree, InitialState1);
+			InitialState1 = initialize_tree(Entries, InitialState);
 		true ->
-			InitialState2 = load_tree_structure(InitialState),
+			InitialState1 = load_tree_structure(InitialState),
 			
 			io:format("blockchain:load_tree_structure finished.~n",[]),
-			Tid = InitialState2#state.tid_tree,
-			Tips = InitialState2#state.tips,
-			Subtips = InitialState2#state.subtips,
+			Tid     = InitialState1#state.tid_tree,
+			Tips    = InitialState1#state.tips,
+			Subtips = InitialState1#state.subtips,
 			view:update_blockchain(
-				get_painted_tree(Tid, {Tips,Subtips}, 10)),
-			
-			erlang:send_after(?TREE_UPDATE_INTERVAL, self(), update_tree)
+				get_painted_tree(Tid, {Tips,Subtips}, 10))
 	end,
 			
-	{ok, InitialState2}.
-
-
-load_tree_structure(S) ->
-	{TreeFilePath, TreeSubFilePath} = S#state.tree_file_path,
-
-	{ok,Tid   } = ets:file2tab(TreeFilePath),
-	{ok,TidSub} = ets:file2tab(TreeSubFilePath),
-	
-	[{_,Roots}]   = ets:lookup(TidSub, roots),
-	[{_,Leaves}]  = ets:lookup(TidSub, leaves),
-	[{_,Tips}]    = ets:lookup(TidSub, tips),
-	[{_,Subtips}] = ets:lookup(TidSub, subtips),
-
-	S#state{tid_tree=Tid,
-		roots=Roots, leaves=Leaves, tips=Tips, subtips=Subtips}.
-
-
-save_tree_structure(S) ->
-	{TreeFilePath, TreeSubFilePath} = S#state.tree_file_path,
-
-	Tid    = S#state.tid_tree,
-	TidSub = ets:new(tree_sub, []),
-	true = ets:insert_new(TidSub, {roots, S#state.roots}),
-	true = ets:insert_new(TidSub, {leaves, S#state.leaves}),
-	true = ets:insert_new(TidSub, {tips, S#state.tips}),
-	true = ets:insert_new(TidSub, {subtips, S#state.subtips}),
-
-	ok = ets:tab2file(Tid, TreeFilePath),
-	ok = ets:tab2file(TidSub, TreeSubFilePath),
-
-	S.
+	erlang:send_after(?TREE_UPDATE_INTERVAL, self(), update_tree),
+	{ok, InitialState1}.
 
 
 handle_call({collect_getheaders_hashes, MaxDepth}, _From, S) ->
 	GenesisBlockHash = rules:genesis_block_hash(S#state.net_type),
-	
-	case S#state.tid_tree of
-		undefined -> %{reply, not_ready, S};
-			{reply, [[GenesisBlockHash]], S}; % required for startup
-		Tid ->
-			Tips = S#state.tips,
+	Tid = S#state.tid_tree,
+	Tips = S#state.tips,
 
-			Advertise =
-			case Tips of
-				[ ] -> [[GenesisBlockHash]];
-		 		 _  -> [extended_tip_hashes(Tid, T, MaxDepth) || T <- Tips]
-			end,
-			{reply, Advertise, S}
-	end;
+	Advertise =
+	case Tips of
+		[ ] -> [[GenesisBlockHash]];
+		 _  -> [extended_tip_hashes(Tid, T, MaxDepth) || T <- Tips]
+	end,
+	{reply, Advertise, S};
+
 handle_call({collect_getheaders_hashes_exponential, {A,P}}, _From, S) ->
 	GenesisBlockHash = rules:genesis_block_hash(S#state.net_type),
-
-	case S#state.tid_tree of
-		undefined -> %{reply, not_ready, S};
-			{reply, [GenesisBlockHash], S}; % required for startup
-		Tid ->
-			Tips = S#state.tips,
-
-			case Tips of
-				[ ] -> {reply, [GenesisBlockHash], S};
-				 _  ->
-				 	Tip = hd(Tips),
-					Tips1 = u:list_rotate_left1(Tips),
-				 	Advertise = exponentially_sampled_hashes(Tid, Tip, {A,P}),
-					{reply, Advertise, S#state{tips=Tips1}}
-			end
+	Tid = S#state.tid_tree,
+	Tips = S#state.tips,
+	
+	case Tips of
+		[ ] -> {reply, [GenesisBlockHash], S};
+		 _  ->
+		 	Tip = hd(Tips),
+			Tips1 = u:list_rotate_left1(Tips),
+			Advertise = exponentially_sampled_hashes(Tid, Tip, {A,P}),
+			{reply, Advertise, S#state{tips=Tips1}}
 	end;
+
 handle_call(get_floating_root_prevhashes, _From, S) ->
-	case S#state.tid_tree of
-		undefined -> {reply, not_ready, S};
-		_Tid ->
-			Roots = S#state.roots,
-			GenesisBlockHash = rules:genesis_block_hash(S#state.net_type),
-			[PrevHash || {_,_,PrevHash,_} <- Roots,
-				PrevHash =/= GenesisBlockHash]
-	end;
+	Roots = S#state.roots,
+	GenesisBlockHash = rules:genesis_block_hash(S#state.net_type),
+	[PrevHash || {_,_,PrevHash,_} <- Roots,
+		PrevHash =/= GenesisBlockHash];
+
 handle_call(get_best_height, _From, S) ->
-	case S#state.tid_tree of
-		undefined -> {reply, 0, S};
-		_Tid ->
-			case S#state.tips of
-				[] -> {reply, 0, S};
-				[{Height,_Leaf}|_T] -> {reply, Height, S}
-			end
+	case S#state.tips of
+		[] -> {reply, 0, S};
+		[{Height,_Leaf}|_T] -> {reply, Height, S}
 	end;
-handle_call({get_proposed_headers, PeerTreeHashes, StopHash},
-	_From, S) ->
+
+handle_call({get_proposed_headers, PeerTreeHashes, StopHash}, _From, S) ->
 	Tid = S#state.tid_tree,
 	Tips = S#state.tips,
 
@@ -257,27 +210,15 @@ handle_call({get_proposed_headers, PeerTreeHashes, StopHash},
 	end.
 
 
-%% for the paylod of headers message
-%% We save headers that match the following conditions:
-%% * has a hash that does not exist in the current table
-%% * its hash satisfies its decleared difficulty (nBits)
-handle_cast({save_headers, HeadersPayload, Origin}, S) ->
-	Tid = S#state.tid_tree, %NOTE, can be undefined headers are empty
-	HeadersFilePath = S#state.headers_file_path,
+handle_cast({got_headers, HeadersPayload, Origin}, S) ->
+	Tid = S#state.tid_tree,
 
 	{_N_Headers, Rest} = protocol:read_var_int(HeadersPayload),
 
-	%NOTE: the file is created if it does not exist.
-	{ok,F} = file:open(HeadersFilePath,[write,binary,append]),
+	NewEntries = for_each_header_chunk_from_bin(S#state.new_entries,
+		fun precheck_header_func/4, Rest, Origin, Tid),
 
-	NewEntries  = lists:reverse(S#state.new_entries),
-	NewEntries1 = for_each_header_chunk_from_bin(NewEntries,
-		fun save_header_func/3, Rest, Origin, {F,Tid}),
-
-	file:close(F),
-
-	%io:format("saved ~w headers from ~w~n",[N_Headers,Origin]),
-	{noreply, S#state{new_entries=NewEntries1}};
+	{noreply, S#state{new_entries=NewEntries}};
 
 handle_cast({create_getheaders_job_on_update, JobType, JobTarget}, S) ->
 	case JobType of
@@ -293,12 +234,12 @@ handle_cast({create_getheaders_job_on_update, JobType, JobTarget}, S) ->
 
 
 handle_info(update_tree, S) ->
-	NewEntries = S#state.new_entries,
+	NewEntries = lists:reverse(S#state.new_entries),
 
 	{NewEntriesNonError,NewEntriesWithError} =
 	lists:partition(fun(X) ->
 		case X of
-			{<<_Hash:32/binary>>,_Index,<<_PrevHash:32/binary>>, []} -> true;
+			{<<_Hash:32/binary>>,_Bin,<<_PrevHash:32/binary>>, []} -> true;
 			_ -> false
 		end
 		end,
@@ -311,42 +252,26 @@ handle_info(update_tree, S) ->
 	end,
 
 	S2 = case NewEntriesNonError of
-		[ ] ->
-			case S#state.tid_tree of
-				undefined -> % this is called in running for the first time
-					S1 = initialize_tree([], S),
-					S1;
-				_ -> S#state{new_entries=[]}
-			end;
+		[ ] -> S#state{new_entries=[]};
 		 _  ->
-		 	case S#state.tid_tree of
-				undefined -> % do initialize
-					S1 = initialize_tree(NewEntriesNonError, S),
-					S1#state{new_entries=[]};
-				_ ->
-					S1 = update_tree(NewEntriesNonError, S),
-					S1#state{new_entries=[]}
-			end
+			S1 = update_tree(NewEntriesNonError, S),
+			S1#state{new_entries=[]}
 	end,
 
 	io:format("blockchain:update_tree finished -~n",[]),
-	case S2#state.tid_tree of
-		undefined -> ok;
-		_ ->
-			Tips = S2#state.tips,
-			io:format("\t~w tips, ~w leaves, ~w roots.~n",
-			[length(Tips), length(S2#state.leaves), length(S2#state.roots)]),
-			if
-				length(Tips) >= 1 ->
-					{Height,_} = hd(Tips),
-					io:format("\tbest height = ~w.~n", [Height]);
-				true -> ok
-			end
+	Tips = S2#state.tips,
+	io:format("\t~w tips, ~w leaves, ~w roots.~n",
+	[length(Tips), length(S2#state.leaves), length(S2#state.roots)]),
+	if
+		length(Tips) >= 1 ->
+			{Height,_} = hd(Tips),
+			io:format("\tbest height = ~w.~n", [Height]);
+		true -> ok
 	end,
 
 	S3 = process_jobs(S2),
 
-	erlang:send_after(?TREE_UPDATE_INTERVAL, self(), update_tree),
+	erlang:send_after(?TREE_UPDATE_INTERVAL, self(), update_tree), % repeat
 	{noreply, S3}.
 
 
@@ -356,10 +281,10 @@ handle_info(update_tree, S) ->
 %% ----------------------------------------------------------------------------
 initialize_tree(Entries, S) ->
 	NetType = S#state.net_type,
+	Tid = S#state.tid_tree,
 	GenesisBlockHash = rules:genesis_block_hash(NetType),
 
-	Tid = ets:new(blockchain_index, []),
-	insert_new_entries(Tid, Entries, GenesisBlockHash),
+	insert_entries(Tid, Entries, GenesisBlockHash),
 
 	% the list of Entry whose PrevHash is not found in the table
 	% including Block-1
@@ -393,7 +318,7 @@ try_to_connect_floating_root(Tid, {Hash,_,PrevHash,_}=Entry, AccIn) ->
 
 
 % When inserting the entries, we remove potential genesis blocks.
-insert_new_entries(Tid, Entries, GenesisBlockHash) ->
+insert_entries(Tid, Entries, GenesisBlockHash) ->
 	[ets:insert_new(Tid,E) ||
 		{<<Hash:32/binary>>,_Index,<<PrevHash:32/binary>>,_NextHashes}=E
 		<- Entries,
@@ -404,6 +329,9 @@ insert_new_entries(Tid, Entries, GenesisBlockHash) ->
 %% We assume that the number of NewEntries are usually much smaller than that of
 %% existing entries in the table.
 %% We also assume in this update function that there are only additinal changes.
+%%
+%% Hashes in NewEntries must have duplicates neither in their own nor
+%% in tid_tree table.
 update_tree(NewEntries, S) ->
 	%io:format("update_tree got ~w new entries.~n",[length(NewEntries)]),
 	NetType = S#state.net_type,
@@ -412,14 +340,16 @@ update_tree(NewEntries, S) ->
 	Leaves = S#state.leaves,
 	Roots = S#state.roots,
 	
-	insert_new_entries(Tid, NewEntries, GenesisBlockHash),
+	NewEntries1 = save_headers(NewEntries, S#state.headers_file_path),
+	insert_entries(Tid, NewEntries1, GenesisBlockHash),
+	
 	Roots1 =
 	lists:foldl(fun(Entry,AccIn) ->
 		try_to_connect_floating_root(Tid,Entry,AccIn) end, [],
-		Roots ++ NewEntries),
+		Roots ++ NewEntries1),
 	
 	Leaves1 = lists:filter(fun(Entry)-> is_leafQ(Tid,Entry) end,
-		Leaves ++ NewEntries),
+		Leaves ++ NewEntries1),
 
 	{Tips, Subtips} = find_tips(Tid, Leaves1, GenesisBlockHash),
 	view:update_blockchain(
@@ -429,6 +359,32 @@ update_tree(NewEntries, S) ->
 		S#state{roots=Roots1, leaves=Leaves1, tips=Tips, subtips=Subtips},
 	save_tree_structure(NewState).
 
+
+save_headers(NewEntries, HeadersFilePath) ->
+	
+	%NOTE: the file is created if it does not exist.
+	{ok,F} = file:open(HeadersFilePath,[write,binary,append]),
+	Size = filelib:file_size(HeadersFilePath),
+	SavedEntries =
+	[
+		begin
+		% when writing in append mode, position value seems to start with 0,
+		% but after the first write (except <<>>), the value seems to jump
+		% to the expected one.
+		{ok,Position} = file:position(F, cur),
+		ok = file:write(F, HeaderBin),
+		Position1 =
+		case Position of
+			0 -> Size;
+			_ -> Position
+		end,
+		{Hash,{headers,Position1},PrevHash,NextHashes}
+		end
+		|| {Hash,HeaderBin,PrevHash,NextHashes} <- NewEntries
+	],
+	file:close(F),
+
+	SavedEntries.
 
 
 find_leaves(Tid) ->
@@ -553,7 +509,8 @@ collect_hash_loop(Acc, Tid, {Hash,_,PrevHash,_}=_Entry, Length)
 %	.
 
 
-remove_entry_from_the_tree({Hash,_,PrevHash,NextHashes}=Entry, S) ->
+% NOTE: removed entry is not removed from the headers.dat
+remove_entry_from_tree({Hash,_,PrevHash,NextHashes}=Entry, S) ->
 	GenesisBlockHash = rules:genesis_block_hash(S#state.net_type),
 	Tid = S#state.tid_tree,
 	Roots = S#state.roots,
@@ -591,21 +548,19 @@ remove_entry_from_the_tree({Hash,_,PrevHash,NextHashes}=Entry, S) ->
 
 
 
-load_entries_from_file(S) ->
-	HeadersFilePath = S#state.headers_file_path,
-	NewEntries = S#state.new_entries,
+load_entries_from_file(HeadersFilePath) ->
 
 	case u:file_existsQ(HeadersFilePath) of
 		true ->
 			io:format("reading ~s...~n",[HeadersFilePath]),
 			{ok,F} = file:open(HeadersFilePath, [read,binary]),
 			
-			NewEntries1 = read_header_chunk_loop(lists:reverse(NewEntries),F),
+			Entries = read_header_chunk_loop([],F),
 			file:close(F),
 
-			io:format("~w new entries were loaded.~n",[length(NewEntries1)]),
-			S#state{new_entries=NewEntries1};
-		false -> S
+			io:format("~w entries were loaded.~n",[length(Entries)]),
+			Entries;
+		false -> []
 	end.
 
 
@@ -644,41 +599,40 @@ load_headers_from_file(Indexes, S) ->
 	Payload.
 
 
-for_each_header_chunk_from_bin(Acc, _, <<>>, _,{_,_}) -> lists:reverse(Acc);
-for_each_header_chunk_from_bin(Acc, ProcessHeaderFunc,
-	Bin, Origin, {F,Tid}) ->
+for_each_header_chunk_from_bin(Acc, _, <<>>, _, _) -> lists:reverse(Acc);
+for_each_header_chunk_from_bin(Acc, CheckHeaderFunc,
+	Bin, Origin, Tid) ->
 	<<HeaderBin:?HEADER_SIZE/binary, Rest/binary>> = Bin,
 	
 	Result =
-	try ProcessHeaderFunc(HeaderBin,Origin,{F,Tid}) of
+	try CheckHeaderFunc(Acc,HeaderBin,Origin,Tid) of
 		Any -> Any
 	catch
 		Class:Reason -> {{Class,Reason}, Origin, HeaderBin}
 	end,
 	
 	for_each_header_chunk_from_bin([Result|Acc],
-		ProcessHeaderFunc, Rest, Origin, {F,Tid}).
+		CheckHeaderFunc, Rest, Origin, Tid).
 
 
 report_errornous_entries(Entries) ->
-	io:format("reporting ~w errornous header entries:~n", [length(Entries)])
-	%io:format("~w~n", [Entries])
+	io:format("~w errornous header entries~n", [length(Entries)])
 	.
 
 
-save_header_func(HeaderBin, Origin, {F,Tid}) ->
+precheck_header_func(CheckedHeaders, HeaderBin, Origin, Tid) ->
 	{{HashStr,_,PrevHashStr,_,_,DifficultyTarget,_,0},<<>>} =
 		protocol:read_block_header(HeaderBin),
 	Hash = protocol:hash(HashStr),
 	<<HashInt:256/little>> = Hash,
 	PrevHash = protocol:hash(PrevHashStr),
-	case Tid=/=undefined andalso ets:member(Tid, Hash) of
+	
+	case ets:member(Tid, Hash)
+		orelse proplists:lookup(Hash, CheckedHeaders)=/=none of
 		false ->
 			case HashInt =< DifficultyTarget of
 				true ->
-					{ok,Position} = file:position(F, cur),
-					ok = file:write(F, HeaderBin),
-					{Hash,{headers,Position},PrevHash,[]};
+					{Hash,HeaderBin,PrevHash,[]};
 				false ->
 					{{error, not_satisfy_difficulty}, Origin, Hash}
 			end;
@@ -792,6 +746,37 @@ exponential_sampling_loop(Acc, Hash, N, {A,P}, Gap, TidTree) ->
 		[{Hash,_Index,PrevHash,_NextHashes}] ->
 			exponential_sampling_loop(Acc, PrevHash, N, {A,P}, Gap-1, TidTree)
 	end.
+
+
+load_tree_structure(S) ->
+	{TreeFilePath, TreeSubFilePath} = S#state.tree_file_path,
+
+	{ok,Tid   } = ets:file2tab(TreeFilePath),
+	{ok,TidSub} = ets:file2tab(TreeSubFilePath),
+	
+	[{_,Roots}]   = ets:lookup(TidSub, roots),
+	[{_,Leaves}]  = ets:lookup(TidSub, leaves),
+	[{_,Tips}]    = ets:lookup(TidSub, tips),
+	[{_,Subtips}] = ets:lookup(TidSub, subtips),
+
+	S#state{tid_tree=Tid,
+		roots=Roots, leaves=Leaves, tips=Tips, subtips=Subtips}.
+
+
+save_tree_structure(S) ->
+	{TreeFilePath, TreeSubFilePath} = S#state.tree_file_path,
+
+	Tid    = S#state.tid_tree,
+	TidSub = ets:new(tree_sub, []),
+	true = ets:insert_new(TidSub, {roots, S#state.roots}),
+	true = ets:insert_new(TidSub, {leaves, S#state.leaves}),
+	true = ets:insert_new(TidSub, {tips, S#state.tips}),
+	true = ets:insert_new(TidSub, {subtips, S#state.subtips}),
+
+	ok = ets:tab2file(Tid, TreeFilePath),
+	ok = ets:tab2file(TidSub, TreeSubFilePath),
+
+	S.
 
 
 process_jobs(S) ->
