@@ -257,6 +257,7 @@ handle_cast({got_inv, InvVects, Origin}, S) ->
 
 handle_cast({got_tx, Payload, Origin}, S) ->
 	tx:add_to_mempool({tx, Payload}, Origin),
+	view:got_tx(),
 	
 	{noreply, S}.
 

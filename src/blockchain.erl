@@ -48,6 +48,7 @@
 		leaves,
 		tips,
 		subtips,
+		best_height,
 		tips_jobs,
 		exp_sampling_jobs,
 		check_integrity_on_startup
@@ -170,6 +171,7 @@ handle_call(get_floating_root_prevhashes, _From, S) ->
 	[PrevHash || {_,_,PrevHash,_} <- Roots,
 		PrevHash =/= GenesisBlockHash];
 
+%%FIXME, use state.bet_height?
 handle_call(get_best_height, _From, S) ->
 	case S#state.tips of
 		[] -> {reply, 0, S};
@@ -270,17 +272,26 @@ handle_info(update_tree, S) ->
 	Tips = S2#state.tips,
 	io:format("\t~w tips, ~w leaves, ~w roots.~n",
 	[length(Tips), length(S2#state.leaves), length(S2#state.roots)]),
+	S3 =
 	if
 		length(Tips) >= 1 ->
 			{Height,_} = hd(Tips),
-			io:format("\tbest height = ~w.~n", [Height]);
-		true -> ok
+			io:format("\tbest height = ~w.~n", [Height]),
+			% is the best height updated?
+			OldHeight = S2#state.best_height,
+			case Height =/= OldHeight of
+				true ->
+					view:update_best_height(OldHeight, Height);
+				false -> ok
+			end,
+			S2#state{best_height=Height};
+		true -> S2
 	end,
 
-	S3 = process_jobs(S2),
+	S4 = process_jobs(S3),
 
 	erlang:send_after(?TREE_UPDATE_INTERVAL, self(), update_tree), % repeat
-	{noreply, S3}.
+	{noreply, S4}.
 
 
 

@@ -9,7 +9,8 @@
 
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2]).
 
--export([start_link/1, update_blockchain/1]).
+-export([start_link/1,
+	update_blockchain/1, update_best_height/2, got_tx/0]).
 
 -record(state,
 	{
@@ -29,13 +30,14 @@ start_link(Coordinate) ->
 
 %% mole
 %%	update_blockchain
-%%	get_tx
-%%	get_block
+%%	update_best_height
+%%	got_tx
+%%	got_block
 %%	create_block
 %%	send_tx
 %%	send_block
 update_blockchain(PaintedTree) ->
-	io:format("view:update_blockchain~n",[]),
+	%io:format("view:update_blockchain~n",[]),
 	View = create_blockchain_view(PaintedTree),
 
 	%% prepare for JSON conversion
@@ -47,6 +49,19 @@ update_blockchain(PaintedTree) ->
 
 	What = #{ cmd => update_blockchain, view => View1 },
 	gen_server:cast(?MODULE, {update, What}).
+
+
+update_best_height(From, To) ->
+	
+	What = #{ cmd => update_best_height, from => From, to => To },
+	gen_server:cast(?MODULE, {update, What}).
+
+
+got_tx() ->
+	
+	What = #{ cmd => got_tx },
+	gen_server:cast(?MODULE, {update, What}).
+
 
 
 %% ----------------------------------------------------------------------------

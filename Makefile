@@ -12,3 +12,6 @@ clean:
 
 start: compile
 	erl -name mole0@127.0.0.1 -setcookie moles -pa _build/default/lib/*/ebin -s moles_app
+
+service: compile
+	erl -name mole0@127.0.0.1 -setcookie moles -pa _build/default/lib/*/ebin -noshell -detached -s moles_app &
