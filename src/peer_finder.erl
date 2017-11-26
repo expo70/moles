@@ -42,7 +42,7 @@ request_peer(Priority) ->
 	gen_server:call(?MODULE, {request_peer, Priority}, 15*1000).
 
 get_peer_info(IP_Address) ->
-	gen_server:call(?MODULE, {get_peer_info, IP_Address}).
+	gen_server:call(?MODULE, {get_peer_info, IP_Address}, 15*1000).
 
 check_now_in_use(IP_Address) ->
 	gen_server:call(?MODULE, {check_now_in_use, IP_Address}).

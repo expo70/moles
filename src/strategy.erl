@@ -212,7 +212,7 @@ handle_cast({got_addr, NetAddrs, Origin}, S) ->
 	end,
 	
 	lists:foreach(fun(N) -> peer_finder:update_peer(N) end, NetAddrs1),
-	JobSpecs = [
+	JobSpec = {addr, [
 		begin
 			% always found
 			{IP_Address, _UserAgent, ServicesFlag, _BestHeight,
@@ -229,11 +229,12 @@ handle_cast({got_addr, NetAddrs, Origin}, S) ->
 				regtest -> rules:default_port(S#state.net_type)+1;
 				_ -> rules:default_port(S#state.net_type)
 			end,
-			{addr, {AdvertisedTime, ServicesFlag, IP_Address, Port}}
+			{AdvertisedTime, ServicesFlag, IP_Address, Port}
 		end
-		|| {_,_,IP_Address,_} <- NetAddrs1],
-%	lists:foreach(fun(J) -> jobs:add_job({{except,Origin},J,60}) end,
-%		JobSpecs),
+		|| {_,_,IP_Address,_} <- NetAddrs1
+		]
+	},
+	jobs:add_job({{except,Origin},JobSpec,60}),
 
 	{noreply, S};
 

@@ -625,7 +625,20 @@ do_job({_Target, JobSpec, _ExpirationTime, _Stamps}, S) ->
 			Message = protocol:message(NetType,headers,Payload),
 			{ok,S1} = send(Socket, Message, S),
 			S1;
-		{addr, {AdvertisedTime, Services, IP_Address, Port}} ->
+		{addr, NetAddrs} ->
+			Count = length(NetAddrs),
+			io:format("comm:job addr(~w)~n",[Count]),
+			CountBin = protocol:var_int(Count),
+			NetAddrsBin = list_to_binary([
+				protocol:net_addr(AdvertisedTime,
+					IP_Address, Port, {Services, ProtocolVersion})
+				|| {AdvertisedTime, Services, IP_Address, Port} <- NetAddrs
+			]),
+			Payload = <<CountBin/binary, NetAddrsBin/binary>>,
+			Message = protocol:message(NetType,addr,Payload),
+			{ok,S1} = send(Socket, Message, S),
+			S1;
+		{addr1, {AdvertisedTime, Services, IP_Address, Port}} ->
 			% advertise one address
 			io:format("comm:job addr(1)~n",[]),
 			CountBin = protocol:var_int(1),
