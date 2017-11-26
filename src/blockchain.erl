@@ -279,11 +279,14 @@ handle_info(update_tree, S) ->
 			io:format("\tbest height = ~w.~n", [Height]),
 			% is the best height updated?
 			OldHeight = S2#state.best_height,
-			case Height =/= OldHeight of
-				true ->
-					view:update_best_height(OldHeight, Height);
-				false -> ok
-			end,
+			%case Height =/= OldHeight of
+			%	true ->
+					view:update_best_height(OldHeight, Height), %;
+			%	false -> ok
+			%end,
+			view:update_blockchain(
+				get_painted_tree(S2#state.tid_tree,
+					{S2#state.tips,S2#state.subtips}, 10)),
 			S2#state{best_height=Height};
 		true -> S2
 	end,
@@ -371,8 +374,8 @@ update_tree(NewEntries, S) ->
 		Leaves ++ NewEntries1),
 
 	{Tips, Subtips} = find_tips(Tid, Leaves1, GenesisBlockHash),
-	view:update_blockchain(
-		get_painted_tree(Tid, {Tips,Subtips}, 10)),
+	%view:update_blockchain(
+	%	get_painted_tree(Tid, {Tips,Subtips}, 10)),
 
 	NewState =
 		S#state{roots=Roots1, leaves=Leaves1, tips=Tips, subtips=Subtips},
@@ -478,13 +481,21 @@ get_painted_tree(_Tid, {[], _Subtips}, _MaxLength) -> [];
 get_painted_tree(Tid, {Tips, Subtips}, MaxLength) ->
 	{BestHeight, _} = hd(Tips),
 	MaxLength1 = min(MaxLength, BestHeight),
+	%io:format("get_painted_tree: Tips = ~p, Subtips = ~p~n",[Tips,Subtips]),
+	HeightLimit = BestHeight - MaxLength1 + 1,
+	StartTips = [E || {H,E} <- Tips ++ Subtips, H >= HeightLimit],
+	%FIXME, for long branch whose fork is under the paint limit
+	% remove branches (i.e. run except the first run) that do not meet forks
 
+	Result=
 	lists:foldl(
 		fun(TipEntry,PaintedIn) ->
 			paint_loop(PaintedIn, [], Tid, TipEntry, MaxLength1) end,
 		[], % PaintedIn0
-		[TipEntry || {_H,TipEntry} <- Tips ++ Subtips]
-	).
+		StartTips
+	),
+	%io:format("\t~p~n",[Result]),
+	Result.
 
 
 paint_loop(Painted, Acc, _Tid, {Hash,_,_,_}=_NotForkPoint, 1) ->
@@ -558,8 +569,8 @@ remove_entry_from_tree({Hash,_,PrevHash,NextHashes}=Entry, S) ->
 
 	{Tips,Subtips} = find_tips(Tid, Leaves2, GenesisBlockHash),
 	io:format("blockchain:remove_entry_from_tree finished.~n",[]),
-	view:update_blockchain(
-		get_painted_tree(Tid, {Tips,Subtips}, 10)),
+	%view:update_blockchain(
+	%	get_painted_tree(Tid, {Tips,Subtips}, 10)),
 
 	NewState =
 		S#state{roots=Roots2, leaves=Leaves2, tips=Tips, subtips=Subtips},
