@@ -275,12 +275,11 @@ handle_info(check_n_peers, S) ->
 	end;
 
 handle_info(advertise_tip, S) ->
-	MaxDepth = 5,
-	ListOfList = blockchain:collect_getheaders_hashes(MaxDepth),
-	[jobs:add_job(
-		{all, {getheaders,Hashes}, 15})
-	|| Hashes <- ListOfList],
-
+	blockchain:create_getheaders_job_on_update(
+		tips,
+		all
+	),
+	
 	erlang:send_after(?ADVERTISE_TIP_INTERVAL, self(), advertise_tip), % repeat
 	{noreply, S}.
 
