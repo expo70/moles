@@ -1,4 +1,3 @@
-%%
 -module(strategy).
 
 -behaviour(gen_server).
@@ -19,7 +18,8 @@
 -export([start_link/1,
 	get_n_peers/0,
 	add_peer/1, remove_peer/1,
-	got_headers/2, got_getheaders/2, got_addr/2, got_inv/2, got_tx/2]).
+	got_headers/2, got_getheaders/2, got_addr/2, got_inv/2, got_tx/2,
+	got_block/2]).
 
 %% gen_server callbak
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2]).
@@ -58,6 +58,9 @@ got_inv(InvVects, Origin) ->
 got_tx(Payload, Origin) ->
 	gen_server:cast(?MODULE, {got_tx, Payload, Origin}).
 
+got_block(Payload, Origin) ->
+	gen_server:cast(?MODULE, {got_block, Payload, Origin}).
+
 
 %% ----------------------------------------------------------------------------
 %% gen_server callback
@@ -91,15 +94,6 @@ handle_cast({add_peer, IP_Address}, S) ->
 	N_Peers = S#state.n_peers,
 	
 	case Mode of
-		header_first1 ->
-			MaxDepth = 5,
-			case blockchain:collect_getheaders_hashes(MaxDepth) of
-				not_ready -> ok;
-				ListOfList ->
-					[jobs:add_job(
-					{IP_Address, {getheaders,Hashes}, 60})
-					|| Hashes <- ListOfList]
-			end;
 		header_first ->
 			{A,P} = {0.75,0.08},
 			case blockchain:collect_getheaders_hashes_exponential({A,P}) of
@@ -139,7 +133,7 @@ handle_cast({got_headers, Payload, Origin}, S) ->
 	if
 		N_Headers == ?MAX_HEADERS_COUNT ->
 			% try to obtain more headers
-			blockchain:create_getheaders_job_on_update(
+			blockchain:create_job_on_update(
 				tips,
 				Origin
 				),
@@ -147,7 +141,7 @@ handle_cast({got_headers, Payload, Origin}, S) ->
 		N_Headers <  ?MAX_HEADERS_COUNT ->
 			% peer seems to send all the headers available
 			% now we annouce the current view of the tree to the other peers
-			blockchain:create_getheaders_job_on_update(
+			blockchain:create_job_on_update(
 				exponential_sampling,
 				{except, Origin}
 				),
@@ -238,8 +232,8 @@ handle_cast({got_addr, NetAddrs, Origin}, S) ->
 			{addr, {AdvertisedTime, ServicesFlag, IP_Address, Port}}
 		end
 		|| {_,_,IP_Address,_} <- NetAddrs1],
-	lists:foreach(fun(J) -> jobs:add_job({{except,Origin},J,60}) end,
-		JobSpecs),
+%	lists:foreach(fun(J) -> jobs:add_job({{except,Origin},J,60}) end,
+%		JobSpecs),
 
 	{noreply, S};
 
@@ -248,9 +242,17 @@ handle_cast({got_inv, InvVects, Origin}, S) ->
 
 	case Mode of
 		header_first -> ok;
-		_ -> %FIXME
+		tip_on_header ->
+			% Tx has no unique id, thus we respond to all the invs
+			% regardless of the duplication of their hashes.
 			InvVectsTx = [IV || {msg_tx, _HashStr}=IV <- InvVects],
-			jobs:add_job({Origin, {getdata, InvVectsTx}, 30})
+			jobs:add_job({Origin, {getdata, InvVectsTx}, 30}),
+
+			%FIXME
+			[blockchain:create_job_on_update(
+				new_block,
+				{Origin, protocol:hash(HashStr)}
+				) || {msg_block, HashStr} <- InvVects]
 	end,
 
 	{noreply, S};
@@ -258,6 +260,14 @@ handle_cast({got_inv, InvVects, Origin}, S) ->
 handle_cast({got_tx, Payload, Origin}, S) ->
 	tx:add_to_mempool({tx, Payload}, Origin),
 	view:got_tx(),
+	
+	{noreply, S};
+
+handle_cast({got_block, Payload, Origin}, S) ->
+	%FIXME
+	io:format("strategy:got_block Payload size = ~w from ~p~n",
+		[byte_size(Payload), Origin]),
+	%view:got_block(),
 	
 	{noreply, S}.
 
@@ -275,7 +285,7 @@ handle_info(check_n_peers, S) ->
 	end;
 
 handle_info(advertise_tip, S) ->
-	blockchain:create_getheaders_job_on_update(
+	blockchain:create_job_on_update(
 		tips,
 		all
 	),

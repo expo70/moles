@@ -58,7 +58,7 @@
 -define(HANDSHAKE_TIMEOUT,      10*1000).
 -define(PING_INTERVAL,          60*1000). % =  1 min
 -define(PING_TIMEOUT,        20*60*1000). % = 20 min
--define(FIND_JOB_INTERVAL,       5*1000).
+-define(FIND_JOB_INTERVAL,       3*1000).
 
 
 %%-----------------------------------------------------------------------------
@@ -430,7 +430,8 @@ process_getheaders(Payload, S) ->
 	S.
 
 process_sendheaders(Payload, S) ->
-	io:format("Packet (sendheaders) = ~p~n", [protocol:parse_sendheaders(Payload)]),
+	io:format("Packet (sendheaders) = ~p~n",
+		[protocol:parse_sendheaders(Payload)]),
 	S.
 
 
@@ -448,7 +449,9 @@ process_headers(Payload, S) ->
 
 
 process_block(Payload, S) ->
-	io:format("Packet (block) = ~p~n", [protocol:read_block(Payload)]),
+	%io:format("Packet (block) = ~p~n", [protocol:read_block(Payload)]),
+	io:format("Pakcet (block)~n",[]),
+	strategy:got_block(Payload, S#state.peer_address),
 	S.
 
 

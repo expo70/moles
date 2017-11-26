@@ -24,7 +24,7 @@
 	get_floating_root_prevhashes/0,
 	get_best_height/0,
 	get_proposed_headers/2,
-	create_getheaders_job_on_update/2
+	create_job_on_update/2
 	]).
 
 -include_lib("eunit/include/eunit.hrl").
@@ -51,6 +51,7 @@
 		best_height,
 		tips_jobs,
 		exp_sampling_jobs,
+		new_block_jobs,
 		check_integrity_on_startup
 	}).
 
@@ -79,10 +80,10 @@ get_best_height() ->
 
 get_proposed_headers(PeerTreeHashes, StopHash) ->
 	gen_server:call(?MODULE,
-		{get_proposed_headers, PeerTreeHashes, StopHash}).
+		{get_proposed_headers, PeerTreeHashes, StopHash}, 15*1000).
 
-create_getheaders_job_on_update(JobType, JobTarget) ->
-	gen_server:cast(?MODULE, {create_getheaders_job_on_update,
+create_job_on_update(JobType, JobTarget) ->
+	gen_server:cast(?MODULE, {create_job_on_update,
 		JobType, JobTarget}).
 
 
@@ -111,6 +112,7 @@ init([NetType]) ->
 			new_entries = [],
 			tips_jobs = [],
 			exp_sampling_jobs = [],
+			new_block_jobs = [],
 			check_integrity_on_startup = false
 		},
 	
@@ -229,7 +231,7 @@ handle_cast({got_headers, HeadersPayload, Origin}, S) ->
 
 	{noreply, S#state{new_entries=NewEntries}};
 
-handle_cast({create_getheaders_job_on_update, JobType, JobTarget}, S) ->
+handle_cast({create_job_on_update, JobType, JobTarget}, S) ->
 	case JobType of
 		tips ->
 			TipsJobs = S#state.tips_jobs,
@@ -238,7 +240,12 @@ handle_cast({create_getheaders_job_on_update, JobType, JobTarget}, S) ->
 		exponential_sampling ->
 			ExpSamplingJobs = S#state.exp_sampling_jobs,
 			ExpSamplingJobs1 = [JobTarget|ExpSamplingJobs],
-			{noreply, S#state{exp_sampling_jobs=ExpSamplingJobs1}}
+			{noreply, S#state{exp_sampling_jobs=ExpSamplingJobs1}};
+		new_block ->
+			NewBlockJobs = S#state.new_block_jobs,
+			{_Node, _BlockHash} = JobTarget, % format check
+			NewBlockJobs1 = [JobTarget|NewBlockJobs],
+			{noreply, S#state{new_block_jobs=NewBlockJobs1}}
 	end.
 
 
@@ -842,6 +849,10 @@ save_tree_structure(S) ->
 	S.
 
 
+%% JOBS:
+%%	tips_jobs
+%%	exp_sampling_jobs
+%%
 process_jobs(S) ->
 	Tid = S#state.tid_tree,
 	Tips = S#state.tips,
@@ -891,7 +902,28 @@ process_jobs(S) ->
 			S1#state{exp_sampling_jobs=[], tips=Tips1}
 	end,
 
-	S2.
+	S3 =
+	case S#state.new_block_jobs of
+		[] -> S2;
+		NewBlockJobs -> % [{Node, BlockHash}| ...]
+			% remove duplicated hashes
+			NewBlockJobs1 = lists:usort(fun({_N1,H1},{_N2,H2})-> H1=<H2 end,
+				NewBlockJobs),
+			% remove block hashes that already exist in the headers
+			NewBlockJobs2 = [Job || {_Node, Hash}=Job <- NewBlockJobs1,
+				not ets:member(Tid, Hash)
+				],
+
+			[
+				begin
+				InvVects = [{msg_block, protocol:parse_hash(Hash)}],
+				jobs:add_job({Node, {getdata, InvVects}, 60})
+				end || {Node,Hash} <- NewBlockJobs2
+			],
+			S2#state{new_block_jobs=[]}
+	end,
+
+	S3.
 
 
 -ifdef(EUNIT).
