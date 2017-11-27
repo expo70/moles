@@ -36,6 +36,10 @@
 -define(TREE_FILE_NAME, "tree.ets").
 -define(TREE_SUB_FILE_NAME, "tree_sub.ets").
 
+-define(N_TARGET_TIMESPAN, 14*24*60*60). % two weeks
+-define(N_TARGET_SPACING, 10*60). % 10 min
+-define(N_INTERVAL, ((?N_TARGET_TIMESPAN) div (?N_TARGET_SPACING))). % 2016
+
 
 -record(state,
 	{
@@ -540,10 +544,10 @@ collect_hash_loop(Acc, Tid, {Hash,_,PrevHash,_}=_Entry, Length)
 	collect_hash_loop([Hash|Acc], Tid, PrevEntry, Length-1).
 
 
-% Required difficulty for tblocks should depend on their 
-% height and time in tree. 
-%check_difficulty_order(Tid) ->
-%	.
+% The target difficulty is determined by a feedback mechanism defined in
+% GetNextWorkRequired() function in Main.cpp of the original bitcoin.
+%
+%work_required(TidTree, {_,_,PrevHash,_}=_Entry)
 
 
 % NOTE: removed entry is not removed from the headers.dat
@@ -691,16 +695,15 @@ report_errornous_entries(Entries) ->
 
 
 precheck_header_func(CheckedHeaders, HeaderBin, Origin, Tid) ->
-	{{HashStr,_,PrevHashStr,_,_,DifficultyTarget,_,0},<<>>} =
+	{{HashStr,_,PrevHashStr,_,_,DifficultyTarget,_,0}=BlockHeader,<<>>} =
 		protocol:read_block_header(HeaderBin),
 	Hash = protocol:hash(HashStr),
-	<<HashInt:256/little>> = Hash,
 	PrevHash = protocol:hash(PrevHashStr),
 	
 	case ets:member(Tid, Hash)
 		orelse proplists:lookup(Hash, CheckedHeaders)=/=none of
 		false ->
-			case HashInt =< DifficultyTarget of
+			case protocol:is_difficulty_satisfiedQ(BlockHeader) of
 				true ->
 					{Hash,HeaderBin,PrevHash,[]};
 				false ->

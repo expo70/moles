@@ -12,6 +12,7 @@
 %% bitcoin/src/consensus/consensus.h
 %%-define(
 -define(COINBASE_MATURITY, 100).
+-define(MAX_BLOCK_SERIALIZED_SIZE, 4000000). % under Segwit
 
 
 %% Verifying Signatures on Tx
@@ -402,6 +403,8 @@ default_port(regtest) -> ?DEFAULT_REGTEST_INCOMING_PORT.
 genesis_block_hash(regtest) -> ?REGTEST_GENESIS_BLOCK_HASH_BIN;
 genesis_block_hash(testnet) -> ?TESTNET_GENESIS_BLOCK_HASH_BIN.
 
+
+max_block_byte_size() -> ?MAX_BLOCK_SERIALIZED_SIZE.
 
 
 -ifdef(EUNIT).

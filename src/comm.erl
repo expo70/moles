@@ -450,8 +450,28 @@ process_headers(Payload, S) ->
 
 process_block(Payload, S) ->
 	%io:format("Packet (block) = ~p~n", [protocol:read_block(Payload)]),
-	io:format("Pakcet (block)~n",[]),
-	strategy:got_block(Payload, S#state.peer_address),
+	io:format("Packet (block)~n",[]),
+
+	% check the block size
+	case byte_size(Payload) =< rules:max_block_byte_size() of
+		true ->
+			% precheck the block header
+			{{HashStr, _, _, _, Timestamp, _, _, TxnCount}=BlockHeader, Rest}
+				= read_block_header(Payload),
+			Now = protocol:unix_timestamp(),
+			% see https://en.bitcoin.it/wiki/Protocol_rules
+			case is_difficulty_satisfiedQ(BlockHeader)
+				andalso Now + (60*60*2) >= Timestamp
+				andalso TxnCount > 0
+			of
+				true ->
+					Hash = protocol:hash(HashStr),
+					strategy:got_block(Hash, Payload, S#state.peer_address);
+				false -> ok % do nothing
+			end;
+		false -> ok % do nothing
+	end,
+
 	S.
 
 
@@ -471,7 +491,9 @@ process_inv(Payload, S) ->
 process_tx(Payload, S) ->
 	%io:format("Packet (tx) = ~p~n", [protocol:read_tx(Payload)]),
 	io:format("Packet (tx)~n", []),
-	strategy:got_tx(Payload, S#state.peer_address),
+	% we use raw hash because Txid is not ID
+	Hash = crypto:hash(sha256,Payload),
+	strategy:got_tx(Hash, Payload, S#state.peer_address),
 	S.
 
 

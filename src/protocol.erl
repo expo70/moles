@@ -534,7 +534,7 @@ tx_transaction_weight({_,_,_,_,_,_,[{tx,T}]}) ->
 %%
 %% Version - also used in soft fork process (BIP-9)
 read_block(Bin) ->
-	{{_Hash, _Version, _PrevBlockHash, _MerkleRootHash, _Timestamp, _Bits, _Nonce, TxnCount}=BlockHeader, Rest} = read_block_header(Bin),
+	{{_Hash, _Version, _PrevBlockHash, _MerkleRootHash, _DifficultyTarget, _Bits, _Nonce, TxnCount}=BlockHeader, Rest} = read_block_header(Bin),
 	{Txs, Rest1} = read_tx_n(Rest, TxnCount),
 	{{BlockHeader, Txs}, Rest1}.
 
@@ -556,6 +556,14 @@ read_block_header(<<Version:32/little, PrevBlock:32/binary, MerkleRoot:32/binary
 	Hash = block_hash(Version, PrevBlock, MerkleRoot, Timestamp, Bits, Nonce),
 	{TxnCount, Rest1} = read_var_int(Rest),
 	{{parse_hash(Hash), Version, parse_hash(PrevBlock), parse_hash(MerkleRoot), Timestamp, parse_difficulty_target(Bits), Nonce, TxnCount}, Rest1}.
+
+
+is_difficulty_satisfiedQ({HashStr, _Version, _PrevHashStr, _MerkleRootStr,
+	_Timestamp, DifficultyTarget, _Nonce, _TxnCount}=_BlockHeader) ->
+		
+	Hash = protocol:hash(HashStr),
+	<<HashInt:256/little>> = Hash,
+	HashInt =< 
 
 
 %% for headers message

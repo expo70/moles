@@ -20,10 +20,13 @@ start_link(NetType) ->
 	gen_server:start_link({local,?MODULE},?MODULE,Args,[]).
 
 
-add_to_mempool({ObjectType, Payload}, Origin) ->
-	gen_server:cast(?MODULE, {add_to_mempool, {ObjectType, Payload}, Origin}).
+add_to_mempool({Type, Hash, Payload}, Origin) ->
+	gen_server:cast(?MODULE, {add_to_mempool, {Type, Hash, Payload}, Origin}).
 
 
+%% ----------------------------------------------------------------------------
+%% gen_server callback
+%% ----------------------------------------------------------------------------
 init([NetType]) ->
 	MempoolDir =
 	case NetType of
@@ -45,9 +48,8 @@ handle_call(_Request, _From, S) ->
 	{reply, ok, S}.
 
 
-handle_cast({add_to_mempool, {ObjectType, Payload}, _Origin}, S) ->
-	HashStr = u:bin_to_hexstr(crypto:hash(sha256, Payload)),
-	Filename = lists:concat([HashStr, ".", ObjectType]),
+handle_cast({add_to_mempool, {Type, Hash, Payload}, _Origin}, S) ->
+	Filename = entry_to_saved_filename({Type, Hash}),
 
 	{ok,F} = file:open(filename:join(S#state.mempool_dir, Filename),
 		[write,binary]),
@@ -60,3 +62,17 @@ handle_cast({add_to_mempool, {ObjectType, Payload}, _Origin}, S) ->
 handle_info(_Info, S) ->
 	{noreply, S}.
 
+
+%% ----------------------------------------------------------------------------
+%% internal functions
+%% ----------------------------------------------------------------------------
+entry_to_saved_filename({Type, Hash}) ->
+	case Type of
+		tx ->
+			HashStr = u:bin_to_hexstr(Hash),
+			lists:concat([HashStr, ".", Type]);
+		block ->
+			% use little-endian to make string hash match block-explorer etc.
+			HashStr = u:bin_to_hexstr(Hash,"",little),
+			lists:concat([HashStr, ".", Type])
+	end.

@@ -55,11 +55,11 @@ got_addr(Addr, Origin) ->
 got_inv(InvVects, Origin) ->
 	gen_server:cast(?MODULE, {got_inv, InvVects, Origin}).
 
-got_tx(Payload, Origin) ->
-	gen_server:cast(?MODULE, {got_tx, Payload, Origin}).
+got_tx(Hash, Payload, Origin) ->
+	gen_server:cast(?MODULE, {got_tx, Hash, Payload, Origin}).
 
-got_block(Payload, Origin) ->
-	gen_server:cast(?MODULE, {got_block, Payload, Origin}).
+got_block(Hash, Payload, Origin) ->
+	gen_server:cast(?MODULE, {got_block, Hash, Payload, Origin}).
 
 
 %% ----------------------------------------------------------------------------
@@ -258,16 +258,17 @@ handle_cast({got_inv, InvVects, Origin}, S) ->
 
 	{noreply, S};
 
-handle_cast({got_tx, Payload, Origin}, S) ->
-	tx:add_to_mempool({tx, Payload}, Origin),
+handle_cast({got_tx, Hash, Payload, Origin}, S) ->
+	tx:add_to_mempool({tx, Hash, Payload}, Origin),
 	view:got_tx(),
 	
 	{noreply, S};
 
-handle_cast({got_block, Payload, Origin}, S) ->
+handle_cast({got_block, Hash, Payload, Origin}, S) ->
 	%FIXME
 	io:format("strategy:got_block Payload size = ~w from ~p~n",
 		[byte_size(Payload), Origin]),
+	tx:add_to_mempool({block, Hash, Payload}, Origin),
 	%view:got_block(),
 	
 	{noreply, S}.
