@@ -534,7 +534,7 @@ tx_transaction_weight({_,_,_,_,_,_,[{tx,T}]}) ->
 %%
 %% Version - also used in soft fork process (BIP-9)
 read_block(Bin) ->
-	{{_Hash, _Version, _PrevBlockHash, _MerkleRootHash, _DifficultyTarget, _Bits, _Nonce, TxnCount}=BlockHeader, Rest} = read_block_header(Bin),
+	{{_Hash, _Version, _PrevBlockHash, _MerkleRootHash, _Timestamp, _DifficultyTarget, _Nonce, TxnCount}=BlockHeader, Rest} = read_block_header(Bin),
 	{Txs, Rest1} = read_tx_n(Rest, TxnCount),
 	{{BlockHeader, Txs}, Rest1}.
 
@@ -563,7 +563,7 @@ is_difficulty_satisfiedQ({HashStr, _Version, _PrevHashStr, _MerkleRootStr,
 		
 	Hash = protocol:hash(HashStr),
 	<<HashInt:256/little>> = Hash,
-	HashInt =< 
+	HashInt =< DifficultyTarget. 
 
 
 %% for headers message
@@ -821,6 +821,15 @@ parse_difficulty_target(N) ->
 %			16#80 -> {P+1,A bsr 8}
 %		end,
 
+
+% Original CBigNum::SetCompact is defined in bignum.h
+compact(BigNum) when is_integer(BigNum) andalso BigNum >= 0 ->
+	compact_loop(3, BigNum).
+
+
+compact_loop(P, A) when A =< 16#7fffff -> <<A:24/little, P:8>>;
+
+compact_loop(P, A) -> compact_loop(P+1, A bsr 8).
 
 
 %% As for hash in the Bitcoin protocol, only block (header) hashes are 

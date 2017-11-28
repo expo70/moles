@@ -456,11 +456,11 @@ process_block(Payload, S) ->
 	case byte_size(Payload) =< rules:max_block_byte_size() of
 		true ->
 			% precheck the block header
-			{{HashStr, _, _, _, Timestamp, _, _, TxnCount}=BlockHeader, Rest}
-				= read_block_header(Payload),
+			{{HashStr, _, _, _, Timestamp, _, _, TxnCount}=BlockHeader, _Rest}
+				= protocol:read_block_header(Payload),
 			Now = protocol:unix_timestamp(),
 			% see https://en.bitcoin.it/wiki/Protocol_rules
-			case is_difficulty_satisfiedQ(BlockHeader)
+			case protocol:is_difficulty_satisfiedQ(BlockHeader)
 				andalso Now + (60*60*2) >= Timestamp
 				andalso TxnCount > 0
 			of

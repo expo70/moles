@@ -18,8 +18,8 @@
 -export([start_link/1,
 	get_n_peers/0,
 	add_peer/1, remove_peer/1,
-	got_headers/2, got_getheaders/2, got_addr/2, got_inv/2, got_tx/2,
-	got_block/2]).
+	got_headers/2, got_getheaders/2, got_addr/2, got_inv/2, got_tx/3,
+	got_block/3]).
 
 %% gen_server callbak
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2]).
@@ -71,7 +71,7 @@ init([NetType]) ->
 	InitialState = #state{
 		net_type = NetType,
 		mode = header_first,
-		target_n_peers = 2,
+		target_n_peers = 0,
 		n_peers = 0,
 		n_peers_reached_tip = 0,
 		best_height = BestHeight
