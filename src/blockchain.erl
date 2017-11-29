@@ -556,7 +556,7 @@ update_heights_loop(H, {Hash,Index,PrevHash,NextHashes,undefined}=Entry,
 	%io:format("~p~n",[Hash]),
 	case H rem 100000 of
 		0 ->
-			erlang:garbage_collect(),
+			%erlang:garbage_collect(),
 			io:format("update_heights reached height = ~p.~n",[H]);
 		_ -> ok
 	end,
@@ -565,25 +565,19 @@ update_heights_loop(H, {Hash,Index,PrevHash,NextHashes,undefined}=Entry,
 		false ->
 			io:format("bad difficulty found in block ~p at height = ~w~n",
 				[Hash,H]),
-			%throw(bad_difficulty); %FIXME
-			Tid = S#state.tid_tree,
-			ets:insert(Tid, {Hash,Index,PrevHash,NextHashes,H}),
-			[
-				begin
-				[E] = ets:lookup(Tid, NextHash),
-				update_heights_loop(H+1,E,S)
-				end || NextHash <- NextHashes
-			];
+			throw(bad_difficulty);
 		true ->
 			% update
 			Tid = S#state.tid_tree,
 			ets:insert(Tid, {Hash,Index,PrevHash,NextHashes,H}),
-			[
-				begin
-				[E] = ets:lookup(Tid, NextHash),
-				update_heights_loop(H+1,E,S)
-				end || NextHash <- NextHashes
-			]
+			case NextHashes of
+				[] -> ok;
+				% make tail-recursive
+				% FIXME, how can we go to the other branches?
+				[NextHash1|_] ->
+					[E] = ets:lookup(Tid, NextHash1),
+					update_heights_loop(H+1,E,S)
+			end
 	end.
 
 
