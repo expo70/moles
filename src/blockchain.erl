@@ -261,7 +261,8 @@ handle_info(update_tree, S) ->
 	{NewEntriesNonError,NewEntriesWithError} =
 	lists:partition(fun(X) ->
 		case X of
-			{<<_Hash:32/binary>>,_Bin,<<_PrevHash:32/binary>>, []} -> true;
+			{<<_Hash:32/binary>>,_Bin,<<_PrevHash:32/binary>>, [],
+				undefined} -> true;
 			_ -> false
 		end
 		end,
@@ -445,7 +446,7 @@ find_leaves(Tid) ->
 	ets:match_object(Tid, {'_','_','_',[],'_'}).
 
 
-is_leafQ(Tid, {Hash,_,_,_}=_Entry) ->
+is_leafQ(Tid, {Hash,_,_,_,_}=_Entry) ->
 	case ets:lookup(Tid, Hash) of
 		[{Hash, _, _, NextHashes, _}] -> NextHashes =:= []
 	end.
@@ -495,19 +496,27 @@ check_difficultyQ({_,Index,_,_,_}=Entry, S) ->
 
 
 % update the entries
+%
+% returns the updated last (i.e. leaf) entry in the accumulator (Entries)
 update_heights(Entries, Height0, S) ->
 	Tid = S#state.tid_tree,
+	UpdatedEntries = [{H,I,PH,NH,Height} ||
+		{{H,I,PH,NH,undefined}, Height}
+		<- lists:zip(Entries,lists:seq(1+Height0,length(Entries)+Height0))],
 
-	[ ets:insert(Tid, {H,I,PH,NH,Height0 + Offset})
-		|| {{H,I,PH,NH,undefined}, Offset}
-		<- lists:zip(Entries,lists:seq(1,length(Entries))) ],
-	
+	[ ets:insert(Tid, E) || E <- UpdatedEntries ],
 	BadDifficulties = lists:filter(fun(E)-> not check_difficultyQ(E,S) end,
-		Entries),
+		UpdatedEntries),
 	
-	io:format("~w entries did not pass the difficulty check.~n",
-		[length(BadDifficulties)]),
-	ok.
+	N_BadDifficulties = length(BadDifficulties),
+	case N_BadDifficulties == 0 of
+		true -> ok;
+		false ->
+			io:format("~w entries did not pass the difficulty check:\n~p~n",
+				[N_BadDifficulties, BadDifficulties])
+	end,
+	
+	lists:last(UpdatedEntries).
 
 
 %% (Leaf)-> o-> o-> o-> x
@@ -520,7 +529,7 @@ update_height_of_leaf(Leaf, S) ->
 	update_height_of_leaf([Leaf], 1, Leaf, S).
 
 update_height_of_leaf(Acc, Height,
-	{Hash,Index,PrevHash,NextHashes,undefined}=Entry, S) ->
+	{_,_,PrevHash,_,undefined}=Entry, S) ->
 	NetType = S#state.net_type,
 	Tid = S#state.tid_tree,
 	GenesisBlockHash = rules:genesis_block_hash(NetType),
@@ -529,9 +538,7 @@ update_height_of_leaf(Acc, Height,
 		[] ->
 			case PrevHash of
 				GenesisBlockHash ->
-					update_heights(Acc, 0, S),
-
-					{Hash,Index,PrevHash,NextHashes,0+length(Acc)};
+					update_heights(Acc, 0, S);
 				_ -> Entry % not connected to the genesis block
 			end;
 		[{_,_,_,_,PrevHeight}=PrevEnt] ->
@@ -540,9 +547,7 @@ update_height_of_leaf(Acc, Height,
 					Acc1 = [PrevEnt|Acc],
 					update_height_of_leaf(Acc1, Height+1, PrevEnt, S);
 				_ ->
-					update_heights(Acc, PrevHeight, S),
-					
-					{Hash,Index,PrevHash,NextHashes,PrevHeight+length(Acc)}
+					update_heights(Acc, PrevHeight, S)
 			end
 	end.
 
