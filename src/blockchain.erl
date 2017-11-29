@@ -35,6 +35,7 @@
 -define(HEADERS_FILE_NAME, "headers.dat").
 -define(TREE_FILE_NAME, "tree.ets").
 -define(TREE_SUB_FILE_NAME, "tree_sub.ets").
+-define(TESTNET_REAL_DIFFICULTY_FILE_NAME, "real_difficulty.ets").
 
 -define(N_TARGET_TIMESPAN, (14*24*60*60)). % two weeks
 -define(N_TARGET_SPACING, (10*60)). % 10 min
@@ -48,6 +49,7 @@
 		tree_file_path,
 		new_entries,
 		tid_tree,
+		tid_testnet_real_difficulty,
 		roots,
 		leaves, % = tips ++ subtips
 		tips,
@@ -56,8 +58,7 @@
 		tips_jobs,
 		exp_sampling_jobs,
 		new_block_jobs,
-		check_integrity_on_startup,
-		tid_testnet_real_difficulty
+		check_integrity_on_startup
 	}).
 
 
@@ -108,24 +109,30 @@ init([NetType]) ->
 	HeadersFilePath = filename:join(HeadersFileDir, ?HEADERS_FILE_NAME),
 	TreeFilePath = filename:join(HeadersFileDir, ?TREE_FILE_NAME),
 	TreeSubFilePath = filename:join(HeadersFileDir, ?TREE_SUB_FILE_NAME),
+	TestnetRealDifficultyFilePath
+		= filename:join(HeadersFileDir, ?TESTNET_REAL_DIFFICULTY_FILE_NAME),
 
 	InitialState = #state{
 			net_type = NetType,
 			headers_file_path = HeadersFilePath,
-			tree_file_path = {TreeFilePath, TreeSubFilePath},
-			tid_tree = ets:new(blockchain_index,[]),
+			tree_file_path = {TreeFilePath, TreeSubFilePath,
+				TestnetRealDifficultyFilePath},
 			new_entries = [],
 			tips_jobs = [],
 			exp_sampling_jobs = [],
 			new_block_jobs = [],
-			check_integrity_on_startup = false,
-			tid_testnet_real_difficulty = ets:new(real_difficulty,[])
+			check_integrity_on_startup = false
 		},
 	
 	case u:file_existsQ(TreeFilePath) of
 		false -> 
 			Entries = load_entries_from_file(HeadersFilePath),
-			InitialState1 = initialize_tree(Entries, InitialState);
+			InitialState1 = initialize_tree(Entries,
+				InitialState#state{
+					tid_tree=ets:new(blockchain_index,[]),
+					tid_testnet_real_difficulty
+						=ets:new(testnet_real_difficulty,[])
+				});
 		true ->
 			InitialState1 = load_tree_structure(InitialState),
 			
@@ -1050,10 +1057,12 @@ exponential_sampling_loop(Acc, Hash, N, {A,P}, Gap, TidTree) ->
 
 
 load_tree_structure(S) ->
-	{TreeFilePath, TreeSubFilePath} = S#state.tree_file_path,
+	{TreeFilePath, TreeSubFilePath,
+		TestnetRealDifficultyFilePath} = S#state.tree_file_path,
 
 	{ok,Tid   } = ets:file2tab(TreeFilePath),
 	{ok,TidSub} = ets:file2tab(TreeSubFilePath),
+	{ok,TidTestnetRealDifficulty} = ets:file2tab(TestnetRealDifficultyFilePath),
 	
 	[{_,Roots}]   = ets:lookup(TidSub, roots),
 	[{_,Leaves}]  = ets:lookup(TidSub, leaves),
@@ -1061,11 +1070,13 @@ load_tree_structure(S) ->
 	[{_,Subtips}] = ets:lookup(TidSub, subtips),
 
 	S#state{tid_tree=Tid,
+		tid_testnet_real_difficulty=TidTestnetRealDifficulty,
 		roots=Roots, leaves=Leaves, tips=Tips, subtips=Subtips}.
 
 
 save_tree_structure(S) ->
-	{TreeFilePath, TreeSubFilePath} = S#state.tree_file_path,
+	{TreeFilePath, TreeSubFilePath,
+		TestnetRealDifficultyFilePath} = S#state.tree_file_path,
 
 	Tid    = S#state.tid_tree,
 	TidSub = ets:new(tree_sub, []),
@@ -1073,9 +1084,11 @@ save_tree_structure(S) ->
 	true = ets:insert_new(TidSub, {leaves, S#state.leaves}),
 	true = ets:insert_new(TidSub, {tips, S#state.tips}),
 	true = ets:insert_new(TidSub, {subtips, S#state.subtips}),
+	TidTestnetRealDifficulty = S#state.tid_testnet_real_difficulty,
 
 	ok = ets:tab2file(Tid, TreeFilePath),
 	ok = ets:tab2file(TidSub, TreeSubFilePath),
+	ok = ets:tab2file(TidTestnetRealDifficulty, TestnetRealDifficultyFilePath),
 
 	S.
 
