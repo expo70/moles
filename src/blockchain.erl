@@ -547,22 +547,38 @@ go_while_valid_difficulty({Leaves,Roots},
 		false ->
 			% 1. reset the heights of all the entries in T
 			% 2. remove this entry from the database
-			% 3. make NextHashes entries new roots 
-			case NextHashes of
-				[ ] ->
-					ets:delete(Tid, Hash), %2
-					{Leaves,Roots};
-				 _  ->
-				 	[ ets:insert({H,I,PH,NH,undefined}) ||
-						{H,I,PH,NH,_} <- T ], %1
-					ets:delete(Tid, Hash), %2
-					% 3
-					NextEntries = [E || [E] <-
-						[ets:lookup(Tid, NH) || NH <- NextHashes]],
-					case ets:lookup(Tid, PrevHash) of
-						[] -> {Leaves,Roots ++ NextEntries};
-						[PrevEntry] -> {[PrevEntry|Leaves],Roots ++ NextEntries}
+			% 3. may change PrevHash entry a new leaf
+			% 4. make NextHashes entries new roots
+			
+			% 1
+			UpdatedTailEntries = [{H,I,PH,NH,undefined} ||
+				{H,I,PH,NH,_} <- T ],
+			[ ets:insert(Tid, E) || E <- UpdatedTailEntries ],
+			
+			ets:delete(Tid, Hash), %2
+
+			% 3
+			Leaves1 =
+			case ets:lookup(Tid, PrevHash) of
+				[] -> Leaves;
+				[{PH,PI,PPH,PNH,PrevHeight}] ->
+					UpdatedPrevEntry =
+						{PH,PI,PPH,lists:delete(PNH,Hash),PrevHeight},
+					ets:insert(Tid, UpdatedPrevEntry), % update
+
+					case UpdatedPrevEntry of
+						{_,_,_,[],_} -> [UpdatedPrevEntry|Leaves];
+						 _ -> Leaves
 					end
+			end,
+
+			% 4
+			NextEntries = [E || [E] <-
+				[ets:lookup(Tid, NH) || NH <- NextHashes]],
+			Roots1 = Roots ++ NextEntries,
+			case UpdatedTailEntries of
+				[ ] -> {Leaves1, Roots1};
+				 _  -> {[lists:last(UpdatedTailEntries)|Leaves1], Roots1}
 			end
 	end.
 
