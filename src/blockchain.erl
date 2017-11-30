@@ -353,8 +353,12 @@ initialize_tree(Entries, S) ->
 			update_heights_from_the_root(GenesisRootHash,S)
 	end,
 	io:format("\tupdating heights(step 2)...~n",[]),
-	UpdatedLeaves = [update_height_of_leaf(L,S) || L <- Leaves],
-	
+	{UpdatedLeaves,UpdatedRoots} = lists:foldl(
+		fun(L,AccIn) -> update_height_of_leaf(AccIn, L,S) end,
+		{[],[Roots]},
+		Leaves
+	),
+
 	io:format("\tfinding tips...~n",[]),
 	{Tips, Subtips} = find_tips(UpdatedLeaves),
 
@@ -362,7 +366,7 @@ initialize_tree(Entries, S) ->
 	view:update_blockchain(
 		get_painted_tree(Tid, {Tips,Subtips}, 10)),
 
-	NewState = S#state{tid_tree=Tid, roots=Roots, leaves=Leaves,
+	NewState = S#state{tid_tree=Tid, roots=UpdatedRoots, leaves=UpdatedLeaves,
 		tips=Tips, subtips=Subtips},
 	save_tree_structure(NewState).
 
@@ -412,13 +416,20 @@ update_tree(NewEntries, S) ->
 	
 	Leaves1 = lists:filter(fun(Entry)-> is_leafQ(Tid,Entry) end,
 		Leaves ++ NewEntries1),
-	UpdatedLeaves = [update_height_of_leaf(L,S) || L <- Leaves1],
+	
+	{UpdatedLeaves,UpdatedRoots} = lists:foldl(
+		fun(L,AccIn) -> update_height_of_leaf(AccIn, L,S) end,
+		{[],[Roots1]},
+		Leaves1
+	),
+
 	{Tips, Subtips} = find_tips(UpdatedLeaves),
 	%view:update_blockchain(
 	%	get_painted_tree(Tid, {Tips,Subtips}, 10)),
 
 	NewState =
-		S#state{roots=Roots1, leaves=Leaves1, tips=Tips, subtips=Subtips},
+		S#state{roots=UpdatedRoots, leaves=UpdatedLeaves,
+			tips=Tips, subtips=Subtips},
 	save_tree_structure(NewState).
 
 
@@ -504,39 +515,70 @@ check_difficultyQ({_,Index,_,_,_}=Entry, S) ->
 
 % update the entries
 %
-% returns the updated last (i.e. leaf) entry in the accumulator (Entries)
-update_heights(Entries, Height0, S) ->
+% returns
+% {[the updated last (i.e. leaf) entry in the accumulator (Entries)|Leaves],
+%  UpdatedRoots}
+%
+% When we find an entry that has invalid difficulty value, we removed the
+% entry from the database and rebuild the tree structure.
+%
+update_heights({Leaves,Roots}, Entries, Height0, S) ->
 	Tid = S#state.tid_tree,
 	UpdatedEntries = [{H,I,PH,NH,Height} ||
 		{{H,I,PH,NH,undefined}, Height}
 		<- lists:zip(Entries,lists:seq(1+Height0,length(Entries)+Height0))],
 
+	% update
 	[ ets:insert(Tid, E) || E <- UpdatedEntries ],
-	BadDifficulties = lists:filter(fun(E)-> not check_difficultyQ(E,S) end,
-		UpdatedEntries),
-	
-	N_BadDifficulties = length(BadDifficulties),
-	case N_BadDifficulties == 0 of
-		true -> ok;
+
+	go_while_valid_difficulty({Leaves,Roots}, UpdatedEntries, S).
+
+
+go_while_valid_difficulty({Leaves,Roots},
+	[{Hash,_Index,PrevHash,NextHashes,_Height}=Entry|T], S) ->
+	Tid = S#state.tid_tree,
+
+	case check_difficultyQ(Entry, S) of
+		true ->
+			case T of
+				[ ] -> {[Entry|Leaves],Roots};
+				 _  -> go_while_valid_difficulty({Leaves,Roots}, T, S)
+			end;
 		false ->
-			io:format("~w entries did not pass the difficulty check:\n~p~n",
-				[N_BadDifficulties, BadDifficulties])
-	end,
-	
-	lists:last(UpdatedEntries).
+			% 1. reset the heights of all the entries in T
+			% 2. remove this entry from the database
+			% 3. make NextHashes entries new roots 
+			case NextHashes of
+				[ ] ->
+					ets:delete(Tid, Hash), %2
+					{Leaves,Roots};
+				 _  ->
+				 	[ ets:insert({H,I,PH,NH,undefined}) ||
+						{H,I,PH,NH,_} <- T ], %1
+					ets:delete(Tid, Hash), %2
+					% 3
+					NextEntries = [E || [E] <-
+						[ets:lookup(Tid, NH) || NH <- NextHashes]],
+					case ets:lookup(Tid, PrevHash) of
+						[] -> {Leaves,Roots ++ NextEntries};
+						[PrevEntry] -> {[PrevEntry|Leaves],Roots ++ NextEntries}
+					end
+			end
+	end.
 
 
 %% (Leaf)-> o-> o-> o-> x
 %% H = 4    3   2   1   0
 %%                  |
 %%                 root
-update_height_of_leaf({_,_,_,_,Height}=Entry,_S) when Height =/= undefined ->
-	Entry;
-update_height_of_leaf(Leaf, S) ->
-	update_height_of_leaf([Leaf], 1, Leaf, S).
+update_height_of_leaf({Leaves,Roots},
+	{_,_,_,_,Height}=Entry,_S) when Height =/= undefined ->
+	{[Entry|Leaves],Roots};
+update_height_of_leaf(AccIn, Leaf, S) ->
+	update_height_of_leaf(AccIn, [Leaf], 1, Leaf, S).
 
-update_height_of_leaf(Acc, Height,
-	{_,_,PrevHash,_,undefined}=Entry, S) ->
+update_height_of_leaf({Leaves, Roots},
+	Acc, Height, {_,_,PrevHash,_,undefined}=Entry, S) ->
 	NetType = S#state.net_type,
 	Tid = S#state.tid_tree,
 	GenesisBlockHash = rules:genesis_block_hash(NetType),
@@ -545,16 +587,17 @@ update_height_of_leaf(Acc, Height,
 		[] ->
 			case PrevHash of
 				GenesisBlockHash ->
-					update_heights(Acc, 0, S);
+					update_heights({Leaves,Roots}, Acc, 0, S);
 				_ -> Entry % not connected to the genesis block
 			end;
 		[{_,_,_,_,PrevHeight}=PrevEnt] ->
 			case PrevHeight of
 				undefined ->
 					Acc1 = [PrevEnt|Acc],
-					update_height_of_leaf(Acc1, Height+1, PrevEnt, S);
+					update_height_of_leaf({Leaves, Roots},
+						Acc1, Height+1, PrevEnt, S);
 				_ ->
-					update_heights(Acc, PrevHeight, S)
+					update_heights({Leaves, Roots}, Acc, PrevHeight, S)
 			end
 	end.
 
@@ -568,7 +611,6 @@ update_heights_loop(H, {Hash,Index,PrevHash,NextHashes,undefined}=Entry,
 	%io:format("~p~n",[Hash]),
 	case H rem 100000 of
 		0 ->
-			%erlang:garbage_collect(),
 			io:format("update_heights reached height = ~p.~n",[H]);
 		_ -> ok
 	end,
