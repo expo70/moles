@@ -1323,9 +1323,12 @@ update_main_chain(StartEntry, S) ->
 	end.
 
 
-update_main_chain_loop(AccIn, {_,_,GenesisBlockHash,_,_},
+update_main_chain_loop(AccIn, {Hash,_,GenesisBlockHash,_,_},
 	GenesisBlockHash, _TidTree) ->
-		AccIn;
+
+	solidify_transactions(Hash),
+
+	AccIn;
 
 update_main_chain_loop(AccIn, {Hash,_,PrevHash,_,_}=_Entry,
 	GenesisBlockHash, TidTree) ->
@@ -1392,7 +1395,7 @@ go_up_to_cancel_main_chain_loop({Hash,_,_,[NextTopHash|T],_}=Entry,
 	
 	ForkPoints1 =
 	case T of
-		[ ] -> ok;
+		[ ] -> ForkPoints;
 		 _  -> lists:delete(Entry, ForkPoints)
 	end,
 
@@ -1580,6 +1583,12 @@ tree_reorganization_test() ->
 
 	U4 = update_main_chain(hd(U3#state.tips), U3),
 	print_tree_state(U4),
+
+	U5 = update_main_chain(hd(U4#state.subtips),U4),
+	print_tree_state(U5),
+
+	U6 = update_main_chain(hd(U5#state.tips), U5),
+	print_tree_state(U6),
 
 	ok.
 	
