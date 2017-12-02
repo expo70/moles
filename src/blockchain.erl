@@ -51,15 +51,41 @@
 		tid_tree,
 		tid_testnet_real_difficulty,
 		roots,
-		leaves, % = tips ++ subtips
+		leaves,
 		tips,
 		subtips,
+		fork_points,
 		best_height,
 		tips_jobs,
 		exp_sampling_jobs,
 		new_block_jobs,
 		check_integrity_on_startup
 	}).
+
+% ### Descriptions
+%
+% roots - [Entry]
+% entries that have no prev entry in the database, including block-1 whose
+% prev entry is the genesis block (in our implementation, the genesis block
+% is not registed in the d.b. Block-1 is simply treated as a special root).
+%
+% leaves - [Entry]
+% entries whose next entries are empty ([]). Leaves that are connected to the
+% genesis block have their height value. The other leaves have 'undefined' value
+% in their height (i.e. have no height value).
+% 
+% tips - [Entry]
+% leaves that have largest hight in the d.b.
+% 
+% subtips - [Entry]
+% leaves that have sub-largest height in the d.b.
+% 
+% fork_points - [Entry]
+% commited fork points of the tree in the d.b., which represent which stem is
+% currently selected as the main chain. For entries that are registered in
+% fork_points, NextHashes parameter has an additional meaning: the first hash
+% represents the currently selected chain.
+% 
 
 
 %% ----------------------------------------------------------------------------
@@ -127,12 +153,30 @@ init([NetType]) ->
 	case u:file_existsQ(TreeFilePath) of
 		false -> 
 			Entries = load_entries_from_file(HeadersFilePath),
+			
 			InitialState1 = initialize_tree(Entries,
 				InitialState#state{
 					tid_tree=ets:new(blockchain_index,[]),
 					tid_testnet_real_difficulty
 						=ets:new(testnet_real_difficulty,[])
-				});
+				}),
+			Tips = InitialState1#state.tips,
+
+			InitialState2 =
+			case length(Tips) >= 1 of
+				true ->
+					case find_common_fork(Tips, InitialState1) of
+						none -> InitialState1;
+						StartEntry ->
+							update_main_chain(StartEntry,
+								InitialState1#state{
+									fork_points = []
+							})
+					end;
+				false -> InitialState1
+			end,
+
+			save_tree_structure(InitialState2);
 		true ->
 			InitialState1 = load_tree_structure(InitialState),
 			
@@ -284,14 +328,16 @@ handle_info(update_tree, S) ->
 	S2 = case NewEntriesNonError of
 		[ ] -> S#state{new_entries=[]};
 		 _  ->
-			S1 = update_tree(NewEntriesNonError, S),
-			S1#state{new_entries=[]}
+			S1 = update_tree(S#state{new_entries=NewEntriesNonError}),
+			save_tree_structure(S1),
+			S1
 	end,
 
 	io:format("blockchain:update_tree finished -~n",[]),
 	Tips = S2#state.tips,
 	io:format("\t~w tips, ~w leaves, ~w roots.~n",
 	[length(Tips), length(S2#state.leaves), length(S2#state.roots)]),
+
 	S3 =
 	if
 		length(Tips) >= 1 ->
@@ -307,8 +353,13 @@ handle_info(update_tree, S) ->
 			view:update_blockchain(
 				get_painted_tree(S2#state.tid_tree,
 					{S2#state.tips,S2#state.subtips}, 10)),
+			
+			% main chain selection can be done here
+			% 
+			
 			S2#state{best_height=Height};
-		true -> S2
+		true -> % others
+			S2
 	end,
 
 	S4 = process_jobs(S3),
@@ -355,7 +406,7 @@ initialize_tree(Entries, S) ->
 	io:format("\tupdating heights(step 2)...~n",[]),
 	{UpdatedLeaves,UpdatedRoots} = lists:foldl(
 		fun(L,AccIn) -> update_height_of_leaf(AccIn, L,S) end,
-		{[],[Roots]},
+		{[],Roots},
 		Leaves
 	),
 
@@ -366,9 +417,8 @@ initialize_tree(Entries, S) ->
 	view:update_blockchain(
 		get_painted_tree(Tid, {Tips,Subtips}, 10)),
 
-	NewState = S#state{tid_tree=Tid, roots=UpdatedRoots, leaves=UpdatedLeaves,
-		tips=Tips, subtips=Subtips},
-	save_tree_structure(NewState).
+	S#state{tid_tree=Tid, roots=UpdatedRoots, leaves=UpdatedLeaves,
+		tips=Tips, subtips=Subtips}.
 
 
 % floating (non-connected) entry is added into AccIn
@@ -398,15 +448,21 @@ insert_entries(Tid, Entries, GenesisBlockHash) ->
 %%
 %% Hashes in NewEntries must have duplicates neither in their own nor
 %% in tid_tree table.
-update_tree(NewEntries, S) ->
+update_tree(S) ->
 	%io:format("update_tree got ~w new entries.~n",[length(NewEntries)]),
 	NetType = S#state.net_type,
 	GenesisBlockHash = rules:genesis_block_hash(NetType),
 	Tid = S#state.tid_tree,
 	Leaves = S#state.leaves,
 	Roots = S#state.roots,
+	NewEntries = S#state.new_entries,
 	
-	NewEntries1 = save_headers(NewEntries, S#state.headers_file_path),
+	NewEntries1 = 
+	case S#state.headers_file_path of
+		undefined -> NewEntries; % no save
+		Path -> save_headers(NewEntries, Path)
+	end,
+
 	insert_entries(Tid, NewEntries1, GenesisBlockHash),
 	
 	Roots1 =
@@ -419,18 +475,14 @@ update_tree(NewEntries, S) ->
 	
 	{UpdatedLeaves,UpdatedRoots} = lists:foldl(
 		fun(L,AccIn) -> update_height_of_leaf(AccIn, L,S) end,
-		{[],[Roots1]},
+		{[],Roots1},
 		Leaves1
 	),
 
 	{Tips, Subtips} = find_tips(UpdatedLeaves),
-	%view:update_blockchain(
-	%	get_painted_tree(Tid, {Tips,Subtips}, 10)),
 
-	NewState =
-		S#state{roots=UpdatedRoots, leaves=UpdatedLeaves,
-			tips=Tips, subtips=Subtips},
-	save_tree_structure(NewState).
+	S#state{new_entries=[], roots=UpdatedRoots, leaves=UpdatedLeaves,
+		tips=Tips, subtips=Subtips}.
 
 
 save_headers(NewEntries, HeadersFilePath) ->
@@ -470,13 +522,12 @@ is_leafQ(Tid, {Hash,_,_,_,_}=_Entry) ->
 	end.
 
 
-split_entries_by_fork_type(Tid) ->
-	ets:foldl(fun({_,_,_,NextHashes,_}=Entry, {F0,F1,Fn}=_AccIn) ->
-		case length(NextHashes) of
-			0 -> {[Entry|F0],F1,       Fn};
-			1 -> { F0,      [Entry|F1],Fn};
-			_ -> { F0,       F1,      [Entry|Fn]}
-		end end, {[],[],[]}, Tid).
+check_validityQ(Entry, S) ->
+	
+	DifficultyCheck = check_difficultyQ(Entry,S),
+	TimestampCheck  = check_timestampQ(Entry,S),
+
+	DifficultyCheck andalso TimestampCheck.
 
 
 check_difficultyQ({_,Index,_,_,_}=Entry, S) ->
@@ -513,6 +564,24 @@ check_difficultyQ({_,Index,_,_,_}=Entry, S) ->
 	end.
 
 
+check_timestampQ({Hash,Index,_,_,_}=Entry, S) ->
+	{_,_,_,_,Time,_,_,_}
+		= load_header_from_file(Index, S),
+
+	PastMedianTime = past_median_time_for(Entry, S),
+	
+	%case PastMedianTime < Time of
+	case PastMedianTime =< Time of
+		true ->
+			true;
+		false ->
+			%io:format("Timestamp(~w): ~w is equal or before median time: ~w~n",
+			io:format("Timestamp(~w): ~w is before median time: ~w~n",
+				[u:bin_to_hexstr(Hash), Time, PastMedianTime]),
+			false
+	end.
+
+
 % update the entries
 %
 % returns
@@ -531,20 +600,21 @@ update_heights({Leaves,Roots}, Entries, Height0, S) ->
 	% update
 	[ ets:insert(Tid, E) || E <- UpdatedEntries ],
 
-	go_while_valid_difficulty({Leaves,Roots}, UpdatedEntries, S).
+	go_while_valid({Leaves,Roots}, UpdatedEntries, S).
 
 
-go_while_valid_difficulty({Leaves,Roots},
+go_while_valid({Leaves,Roots},
 	[{Hash,_Index,PrevHash,NextHashes,_Height}=Entry|T], S) ->
 	Tid = S#state.tid_tree,
 
-	case check_difficultyQ(Entry, S) of
+	case check_validityQ(Entry, S) of
 		true ->
 			case T of
 				[ ] -> {[Entry|Leaves],Roots};
-				 _  -> go_while_valid_difficulty({Leaves,Roots}, T, S)
+				 _  -> go_while_valid({Leaves,Roots}, T, S)
 			end;
 		false ->
+			io:format("removing an invalid entry: ~p~n", [Entry]),
 			% 1. reset the heights of all the entries in T
 			% 2. remove this entry from the database
 			% 3. may change PrevHash entry a new leaf
@@ -563,7 +633,7 @@ go_while_valid_difficulty({Leaves,Roots},
 				[] -> Leaves;
 				[{PH,PI,PPH,PNH,PrevHeight}] ->
 					UpdatedPrevEntry =
-						{PH,PI,PPH,lists:delete(PNH,Hash),PrevHeight},
+						{PH,PI,PPH,lists:delete(Hash,PNH),PrevHeight},
 					ets:insert(Tid, UpdatedPrevEntry), % update
 
 					case UpdatedPrevEntry of
@@ -631,11 +701,12 @@ update_heights_loop(H, {Hash,Index,PrevHash,NextHashes,undefined}=Entry,
 		_ -> ok
 	end,
 
-	case check_difficultyQ(Entry, S) of
+	case check_validityQ(Entry, S) of
 		false ->
-			io:format("bad difficulty found in block ~p at height = ~w~n",
+			io:format(
+				"block ~p does not obey the consensus rule at height = ~w~n",
 				[Hash,H]),
-			throw(bad_difficulty);
+			throw(bad_block);
 		true ->
 			% update
 			Tid = S#state.tid_tree,
@@ -860,6 +931,38 @@ retarget_difficulty(IndexLast, IndexFirst, S) ->
 	NewTarget2.
 
 
+% Consensus rule imposes that we reject a block whose
+% timestamp is the median time of the last 11 blocks or before.
+% ref: BIP-
+% 
+past_median_time_for(Entry, S) ->
+	NetType = S#state.net_type,
+	GenesisBlockHash = rules:genesis_block_hash(NetType),
+	GenesisBlockTime = rules:genesis_block_time(NetType),
+
+	Timestamps = go_down_tree_n_times(
+		fun({_,_,_,_,Time,_,_,_},AccIn) -> [Time|AccIn] end, [],
+		Entry, 11, GenesisBlockHash, S),
+	
+	Timestamps1 =
+	case length(Timestamps) == 11 of
+		true -> Timestamps;
+		false -> [GenesisBlockTime|Timestamps]
+	end,
+
+	Timestamps2 = lists:sort(Timestamps1),
+
+	% when the number of the timestamps are odd (when we are near the genesis
+	% root), mathematical median should be maan of the center 2 values; but
+	% bitcoin code uses values[n_values/2]
+	% 0 1 2 3 4 5
+	% O O O O O O
+	%       |
+	%
+	% NOTE: Erlang array index starts with 1
+	lists:nth((length(Timestamps2) div 2)+1, Timestamps2).
+
+
 load_entries_from_file(HeadersFilePath) ->
 
 	case u:file_existsQ(HeadersFilePath) of
@@ -872,7 +975,9 @@ load_entries_from_file(HeadersFilePath) ->
 
 			io:format("~w entries were loaded.~n",[length(Entries)]),
 			Entries;
-		false -> []
+		false ->
+			io:format("file ~s not found~n",[HeadersFilePath]),
+			[]
 	end.
 
 
@@ -881,17 +986,47 @@ read_header_chunk_loop(Acc, F) ->
 
 	case file:read(F, ?HEADER_SIZE) of
 		{ok,Bin} ->
-			{{HashStr,_,PrevHashStr,_,_,_,_,0},<<>>} =
-			protocol:read_block_header(Bin),
-			Entry = {
-				protocol:hash(HashStr),
-				{headers,Position},
-				protocol:hash(PrevHashStr),
-				[],
-				undefined},
+			Entry = header_bin_to_entry(Bin, {headers,Position}),
 			read_header_chunk_loop([Entry|Acc], F);
 		eof -> lists:reverse(Acc)
 	end.
+
+
+header_bin_to_entry(Bin, Index) ->
+	{{HashStr,_,PrevHashStr,_,_,_,_,0},<<>>} =
+	protocol:read_block_header(Bin),
+	Entry = {
+		protocol:hash(HashStr),
+		Index,
+		protocol:hash(PrevHashStr),
+		[],
+		undefined},
+	Entry.
+
+
+load_entries_from_block_dat_file(FilePath, NetType) ->
+	[
+		block_bin_to_entry(Bin)
+		|| {NetType1, Bin}
+		<- compatibility:split_block_dat_file(FilePath), NetType1=:=NetType
+	].
+
+
+block_bin_to_entry(Bin) ->
+	{{HashStr,_,PrevHashStr,_,_,_,_,_TxCounts},_TxsBin} =
+	protocol:read_block_header(Bin),
+	
+	<<Bin1:80/binary, _Rest/binary>> = Bin,
+	TxCounts1 = protocol:var_int(0),
+	HeaderBin = <<Bin1/binary,TxCounts1/binary>>,
+
+	Entry = {
+		protocol:hash(HashStr),
+		HeaderBin,
+		protocol:hash(PrevHashStr),
+		[],
+		undefined},
+	Entry.
 
 
 load_headers_from_file(Indexes, S) ->
@@ -1083,6 +1218,30 @@ go_down_tree_n_times({_Hash,_Index,PrevHash,_NextHashes,_Height}=_Start,
 	end.
 
 
+go_down_tree_n_times(AccFunc,AccIn,
+	{_Hash,Index,_PrevHash,_NextHashes,_Height}=_Entry, 0, _GenesisBlockHash,
+	S) ->
+		BlockHeader = load_header_from_file(Index, S),
+		AccOut = AccFunc(BlockHeader, AccIn),
+		AccOut;
+go_down_tree_n_times(_AccFunc,AccIn,
+	{_Hash,_Index,GenesisBlockHash,_NextHashes,_Height}=_Entry,
+	_N, GenesisBlockHash, _S) -> AccIn;
+go_down_tree_n_times(AccFunc,AccIn,
+	{_Hash,Index,PrevHash,_NextHashes,_Height}=_Start,
+	N, GenesisBlockHash, S) when is_integer(N) ->
+	TidTree = S#state.tid_tree,
+	
+	case ets:lookup(TidTree, PrevHash) of
+		[] -> throw(not_connected_to_the_genesis_block);
+		[Entry] ->
+			BlockHeader = load_header_from_file(Index, S),
+			AccOut = AccFunc(BlockHeader, AccIn),
+			go_down_tree_n_times(AccFunc, AccOut,
+				Entry, N-1, GenesisBlockHash, S)
+	end.
+
+
 indexes(TreeEntries) -> [Index || {_,Index,_,_,_} <- TreeEntries].
 
 
@@ -1114,6 +1273,129 @@ exponential_sampling_loop(Acc, Hash, N, {A,P}, Gap, TidTree) ->
 	end.
 
 
+% input
+% entries wholse heights have the same value
+find_common_fork([E], _S) -> E;
+find_common_fork(Entries, S) ->
+	io:format("blockchain:find_common_fork~n",[]),
+	TidTree = S#state.tid_tree,
+
+	case length(lists:usort(Entries)) == length(Entries) of
+		true ->
+			find_common_fork_loop(Entries, TidTree);
+		false ->
+			throw(badarg)
+	end.
+
+
+find_common_fork_loop(Entries, TidTree) ->
+	PrevEntries = [E || [E] <- 
+		[ets:lookup(TidTree, PH) || {_,_,PH,_,_} <- Entries]
+	],
+
+	case PrevEntries of
+		[ ] -> none; % there's no common fork
+		 _  ->
+		 	case length(PrevEntries)==length(Entries) of
+				true ->
+					case lists:usort(PrevEntries) == 1 of
+						true -> hd(PrevEntries); % found
+						false ->
+							find_common_fork_loop(PrevEntries, TidTree)
+					end;
+				false -> throw(badarg)
+			end
+	end.
+
+
+update_main_chain(StartEntry, S) ->
+	TidTree = S#state.tid_tree,
+	GenesisBlockHash = rules:genesis_block_hash(S#state.net_type),
+	ForkPoints = S#state.fork_points,
+	
+	case lists:member(StartEntry, ForkPoints) of
+		true -> S; % do nothing
+		false ->
+			update_main_chain_loop(ForkPoints, StartEntry,
+				GenesisBlockHash, TidTree)
+	end.
+
+
+update_main_chain_loop(AccIn, {_,_,GenesisBlockHash,_,_},
+	GenesisBlockHash, _TidTree) ->
+		AccIn;
+
+update_main_chain_loop(AccIn, {Hash,_,PrevHash,_,_}=_Entry,
+	GenesisBlockHash, TidTree) ->
+
+	solidify_transactions(Hash),
+	
+	case ets:lookup(TidTree, PrevHash) of
+		[] -> throw(not_connected_to_the_genesis_block);
+		[{_,_,_,[Hash],_}=PrevEntry] ->
+			update_main_chain_loop(AccIn,PrevEntry,GenesisBlockHash,TidTree);
+		[{PrevHash,PrevIndex,PrevPrevHash,PrevNextHashes,PrevHeight}
+			=PrevEntry] ->
+			
+			case lists:member(PrevEntry, AccIn) of
+				true ->
+					[TopHash|_T] = PrevNextHashes,
+					case TopHash of
+						Hash -> AccIn;
+						Old -> % change the way
+							[OldWayEntry] = ets:lookup(TidTree, Old),
+							AccIn1 =
+							go_up_to_cancel_main_chain_loop(OldWayEntry,
+								AccIn, TidTree),
+
+							PrevNextHashes1 = [Hash|lists:delete(Hash,
+								PrevNextHashes)],
+							PrevEntry1 = {PrevHash,PrevIndex,PrevPrevHash,
+								PrevNextHashes1,PrevHeight},
+							ets:insert(TidTree, PrevEntry1), % update
+							
+							[PrevEntry1|lists:delete(PrevEntry,AccIn1)]
+					end;
+				false ->
+					PrevNextHashes1 = [Hash|lists:delete(Hash,PrevNextHashes)],
+					PrevEntry1 = {PrevHash,PrevIndex,PrevPrevHash,
+						PrevNextHashes1,PrevHeight},
+					ets:insert(TidTree, PrevEntry1), % update
+					
+					AccIn1=[PrevEntry1|AccIn],
+					update_main_chain_loop(AccIn1,PrevEntry,GenesisBlockHash,
+						TidTree)
+			end
+	end.
+
+
+go_up_to_cancel_main_chain_loop({Hash,_,_,[],_}, ForkPoints, _TidTree) ->
+	melt_transactions(Hash),
+	ForkPoints;
+
+go_up_to_cancel_main_chain_loop({Hash,_,_,[NextTopHash|T],_}=Entry,
+	ForkPoints, TidTree) ->
+	melt_transactions(Hash),
+
+	[NextTopHashEntry] = ets:lookup(TidTree, NextTopHash),
+	
+	ForkPoints1 =
+	case T of
+		[ ] -> ok;
+		 _  -> lists:delete(Entry, ForkPoints)
+	end,
+
+	go_up_to_cancel_main_chain_loop(NextTopHashEntry, ForkPoints1, TidTree).
+
+
+solidify_transactions(BlockHash) ->
+	io:format("solidifying Txs of block ~w~n",[u:bin_to_hexstr(BlockHash)]).
+
+
+melt_transactions(BlockHash) ->
+	io:format("melting Txs of block ~w~n",[u:bin_to_hexstr(BlockHash)]).
+
+
 load_tree_structure(S) ->
 	{TreeFilePath, TreeSubFilePath,
 		TestnetRealDifficultyFilePath} = S#state.tree_file_path,
@@ -1122,14 +1404,16 @@ load_tree_structure(S) ->
 	{ok,TidSub} = ets:file2tab(TreeSubFilePath),
 	{ok,TidTestnetRealDifficulty} = ets:file2tab(TestnetRealDifficultyFilePath),
 	
-	[{_,Roots}]   = ets:lookup(TidSub, roots),
-	[{_,Leaves}]  = ets:lookup(TidSub, leaves),
-	[{_,Tips}]    = ets:lookup(TidSub, tips),
-	[{_,Subtips}] = ets:lookup(TidSub, subtips),
+	[{_,Roots}]      = ets:lookup(TidSub, roots),
+	[{_,Leaves}]     = ets:lookup(TidSub, leaves),
+	[{_,Tips}]       = ets:lookup(TidSub, tips),
+	[{_,Subtips}]    = ets:lookup(TidSub, subtips),
+	[{_,ForkPoints}] = ets:lookup(TidSub, fork_points),
 
 	S#state{tid_tree=Tid,
 		tid_testnet_real_difficulty=TidTestnetRealDifficulty,
-		roots=Roots, leaves=Leaves, tips=Tips, subtips=Subtips}.
+		roots=Roots, leaves=Leaves, tips=Tips, subtips=Subtips,
+		fork_points=ForkPoints}.
 
 
 save_tree_structure(S) ->
@@ -1142,6 +1426,7 @@ save_tree_structure(S) ->
 	true = ets:insert_new(TidSub, {leaves, S#state.leaves}),
 	true = ets:insert_new(TidSub, {tips, S#state.tips}),
 	true = ets:insert_new(TidSub, {subtips, S#state.subtips}),
+	true = ets:insert_new(TidSub, {fork_points, S#state.fork_points}),
 	TidTestnetRealDifficulty = S#state.tid_testnet_real_difficulty,
 
 	ok = ets:tab2file(Tid, TreeFilePath),
@@ -1229,6 +1514,62 @@ process_jobs(S) ->
 
 
 -ifdef(EUNIT).
+
+tree_reorganization_test() ->
+	Init = #state{
+		net_type = mainnet,
+		new_entries = [],
+		tid_tree = ets:new(test,[]),
+		tid_testnet_real_difficulty = undefined,
+		roots = [],
+		leaves = [],
+		tips = [],
+		subtips = [],
+		fork_points = [],
+		headers_file_path = "./test-data/headers.dat"
+	},
+
+	file:delete(Init#state.headers_file_path),
+
+	Blk0to4Dat = "./test-data/blk_0_to_4.dat",
+	Blk3ADat   = "./test-data/blk_3A.dat",
+	Blk4ADat   = "./test-data/blk_4A.dat",
+	Blk5ADat   = "./test-data/blk_5A.dat",
+
+	EntryBlk1to4 = tl(load_entries_from_block_dat_file(Blk0to4Dat,mainnet)),
+	EntryBlk3A   =    load_entries_from_block_dat_file(Blk3ADat,mainnet),
+	EntryBlk4A   =    load_entries_from_block_dat_file(Blk4ADat,mainnet),
+	EntryBlk5A   =    load_entries_from_block_dat_file(Blk5ADat,mainnet),
+
+	Block1to4Added = Init#state{new_entries = EntryBlk1to4},
+
+	U1 = update_tree(Block1to4Added),
+
+	io:format(
+		"Tips = ~w\n\t~w tips, ~w leaves, ~w roots.\n\tfork_points = ~p~n",
+		[
+			U1#state.tips,
+			length(U1#state.tips),
+			length(U1#state.leaves),
+			length(U1#state.roots),
+			U1#state.fork_points
+		]),
+
+	ok.
+	
+
+
+
+-endif.
+
+
+
+
+
+
+
+
+-ifdef(EUNIT_OLD).
 
 climb_tree_until_test() ->
 	TidTree = ets:new(tree,[]),
@@ -1389,10 +1730,10 @@ get_proposed_headers_test_func() ->
 	?debugFmt("get_proposed_headers result = ~p~n",[Reply]),
 	ok.
 	
-%get_proposed_headers_test_() ->
-%	[
-%		{timeout, 20, fun get_proposed_headers_test_func/0}
-%	].
+get_proposed_headers_test_() ->
+	[
+		{timeout, 20, fun get_proposed_headers_test_func/0}
+	].
 
 -endif.
 

@@ -81,6 +81,27 @@ block_chunk_loop(Acc, F, ProcessBlockFunc, {RestSize, TotalSize}, {I,MaxBlockCou
 	end.
 
 
+% *.dat
+split_block_dat_file(Path) ->
+	{ok,Bin} = file:read_file(Path),
+
+	split_block_dat_loop([], Bin).
+
+
+split_block_dat_loop(Acc, <<>>) -> lists:reverse(Acc);
+
+split_block_dat_loop(Acc, Bin) ->
+	<<Magic:32/little, Size:32/little, Payload:Size/binary, Rest/binary>> = Bin,
+
+	NetType =
+	case Magic of
+		16#D9B4BEF9 -> mainnet;
+		16#DAB5BFFA -> regtest;
+		16#0709110B -> testnet;
+		16#FEB4BEF9 -> namecoin
+	end,
+	
+	split_block_dat_loop([{NetType, Payload}|Acc], Rest).
 
 
 

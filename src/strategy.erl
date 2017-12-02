@@ -71,7 +71,7 @@ init([NetType]) ->
 	InitialState = #state{
 		net_type = NetType,
 		mode = header_first,
-		target_n_peers = 3,
+		target_n_peers = 0,
 		n_peers = 0,
 		n_peers_reached_tip = 0,
 		best_height = BestHeight

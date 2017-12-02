@@ -1,10 +1,11 @@
 -module(tester).
 -include_lib("eunit/include/eunit.hrl").
+-include("../include/constants.hrl").
+
 
 %-export([get_binary/2]).
 -compile(export_all).
 
--define(HASH256_ZERO, "0000000000000000000000000000000000000000000000000000000000000000").
 
 
 default_config() -> #{
@@ -199,7 +200,7 @@ summarize_Tx1({
 		[
 			begin
 			case PrevTxHashStr of
-				?HASH256_ZERO -> {prevOut, Idx, non_coinbase};
+				?HASH256_ZERO_STR -> {prevOut, Idx, non_coinbase};
 				_ ->
 					io:format("Tx ->. ~s~n",[PrevTxHashStr]),
 					Bin = get_binary({tx, protocol:hash(PrevTxHashStr)},Config),
@@ -210,4 +211,9 @@ summarize_Tx1({
 			end || {Idx,{PrevTxHashStr,Index0},_,_} <- TxIns
 		]
 	}.
+
+
+%% Blockchain is a history. It's time-dependent. To test this in a reproducible
+%% manner, we introduced timeline-based testing facility for unit test.
+%% 
 

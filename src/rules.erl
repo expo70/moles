@@ -400,8 +400,13 @@ default_port(testnet) -> ?DEFAULT_TESTNET_INCOMING_PORT;
 default_port(regtest) -> ?DEFAULT_REGTEST_INCOMING_PORT.
 
 
-genesis_block_hash(regtest) -> ?REGTEST_GENESIS_BLOCK_HASH_BIN;
-genesis_block_hash(testnet) -> ?TESTNET_GENESIS_BLOCK_HASH_BIN.
+genesis_block_hash(mainnet) -> ?MAINNET_GENESIS_BLOCK_HASH_BIN;
+genesis_block_hash(testnet) -> ?TESTNET_GENESIS_BLOCK_HASH_BIN;
+genesis_block_hash(regtest) -> ?REGTEST_GENESIS_BLOCK_HASH_BIN.
+
+genesis_block_time(mainnet) -> 1231006505;
+genesis_block_time(testnet) -> 1296688602;
+genesis_block_time(regtest) -> genesis_block_time(testnet).
 
 
 max_block_byte_size() -> ?MAX_BLOCK_SERIALIZED_SIZE.

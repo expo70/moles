@@ -7,6 +7,7 @@
 
 
 read_message(<<>>) -> {error, empty};
+read_message(Bin) when byte_size(Bin) < 4 -> {error, incomplete, Bin};
 read_message(<<16#D9B4BEF9:32/little, Rest/binary>>) -> read_message(mainnet, Rest); 
 read_message(<<16#DAB5BFFA:32/little, Rest/binary>>) -> read_message(regtest, Rest); 
 read_message(<<16#0709110B:32/little, Rest/binary>>) -> read_message(testnet, Rest); 
