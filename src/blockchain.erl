@@ -1316,8 +1316,10 @@ update_main_chain(StartEntry, S) ->
 	case lists:member(StartEntry, ForkPoints) of
 		true -> S; % do nothing
 		false ->
+			ForkPoints1 =
 			update_main_chain_loop(ForkPoints, StartEntry,
-				GenesisBlockHash, TidTree)
+				GenesisBlockHash, TidTree),
+			S#state{fork_points=ForkPoints1}
 	end.
 
 
@@ -1334,12 +1336,11 @@ update_main_chain_loop(AccIn, {Hash,_,PrevHash,_,_}=_Entry,
 		[] -> throw(not_connected_to_the_genesis_block);
 		[{_,_,_,[Hash],_}=PrevEntry] ->
 			update_main_chain_loop(AccIn,PrevEntry,GenesisBlockHash,TidTree);
-		[{PrevHash,PrevIndex,PrevPrevHash,PrevNextHashes,PrevHeight}
-			=PrevEntry] ->
+		[{PrevHash,PrevIndex,PrevPrevHash,
+			[TopHash|_T]=PrevNextHashes,PrevHeight}=PrevEntry] ->
 			
 			case lists:member(PrevEntry, AccIn) of
 				true ->
-					[TopHash|_T] = PrevNextHashes,
 					case TopHash of
 						Hash -> AccIn;
 						Old -> % change the way
@@ -1357,13 +1358,23 @@ update_main_chain_loop(AccIn, {Hash,_,PrevHash,_,_}=_Entry,
 							[PrevEntry1|lists:delete(PrevEntry,AccIn1)]
 					end;
 				false ->
-					PrevNextHashes1 = [Hash|lists:delete(Hash,PrevNextHashes)],
+					PrevNextHashes1 = lists:delete(Hash,PrevNextHashes),
+
+					AccIn1 =
+					lists:foldl(fun(WayEntry,AccIn0) ->
+						go_up_to_cancel_main_chain_loop(WayEntry,AccIn0,TidTree)
+						end,
+						AccIn,
+						[ E ||
+							[E]<-[ets:lookup(TidTree,H) || H <- PrevNextHashes1]
+						]),
+
 					PrevEntry1 = {PrevHash,PrevIndex,PrevPrevHash,
-						PrevNextHashes1,PrevHeight},
+						[Hash|PrevNextHashes1],PrevHeight},
 					ets:insert(TidTree, PrevEntry1), % update
 					
-					AccIn1=[PrevEntry1|AccIn],
-					update_main_chain_loop(AccIn1,PrevEntry,GenesisBlockHash,
+					AccIn2=[PrevEntry1|AccIn1],
+					update_main_chain_loop(AccIn2,PrevEntry,GenesisBlockHash,
 						TidTree)
 			end
 	end.
@@ -1389,11 +1400,11 @@ go_up_to_cancel_main_chain_loop({Hash,_,_,[NextTopHash|T],_}=Entry,
 
 
 solidify_transactions(BlockHash) ->
-	io:format("solidifying Txs of block ~w~n",[u:bin_to_hexstr(BlockHash)]).
+	io:format("solidifyingBlk ~s~n",[u:bin_to_hexstr(BlockHash)]).
 
 
 melt_transactions(BlockHash) ->
-	io:format("melting Txs of block ~w~n",[u:bin_to_hexstr(BlockHash)]).
+	io:format("melting    Blk ~s~n",[u:bin_to_hexstr(BlockHash)]).
 
 
 load_tree_structure(S) ->
@@ -1515,6 +1526,19 @@ process_jobs(S) ->
 
 -ifdef(EUNIT).
 
+
+print_tree_state(S) ->
+	io:format(
+		"Tips = ~w\n\t~w tips, ~w leaves, ~w roots.\n\tfork_points = ~p~n",
+		[
+			S#state.tips,
+			length(S#state.tips),
+			length(S#state.leaves),
+			length(S#state.roots),
+			S#state.fork_points
+		]).
+
+
 tree_reorganization_test() ->
 	Init = #state{
 		net_type = mainnet,
@@ -1544,16 +1568,18 @@ tree_reorganization_test() ->
 	Block1to4Added = Init#state{new_entries = EntryBlk1to4},
 
 	U1 = update_tree(Block1to4Added),
+	print_tree_state(U1),
 
-	io:format(
-		"Tips = ~w\n\t~w tips, ~w leaves, ~w roots.\n\tfork_points = ~p~n",
-		[
-			U1#state.tips,
-			length(U1#state.tips),
-			length(U1#state.leaves),
-			length(U1#state.roots),
-			U1#state.fork_points
-		]),
+	U2 = update_main_chain(hd(U1#state.tips), U1),
+	print_tree_state(U2),
+
+	BlockAdded = U2#state{new_entries = EntryBlk3A++EntryBlk4A++EntryBlk5A},
+
+	U3 = update_tree(BlockAdded),
+	print_tree_state(U3),
+
+	U4 = update_main_chain(hd(U3#state.tips), U3),
+	print_tree_state(U4),
 
 	ok.
 	
