@@ -341,23 +341,30 @@ handle_info(update_tree, S) ->
 	S3 =
 	if
 		length(Tips) >= 1 ->
+			OldHeight = S2#state.best_height,
 			{_,_,_,_,Height} = hd(Tips),
 			io:format("\tbest height = ~w.~n", [Height]),
-			% is the best height updated?
-			OldHeight = S2#state.best_height,
-			%case Height =/= OldHeight of
-			%	true ->
-					view:update_best_height(OldHeight, Height), %;
-			%	false -> ok
-			%end,
+
 			view:update_blockchain(
 				get_painted_tree(S2#state.tid_tree,
 					{S2#state.tips,S2#state.subtips}, 10)),
+			view:update_best_height(OldHeight, Height),
+
+			% is the best height updated?
+			S2A =
+			case Height =/= OldHeight of
+				true ->
+					% main chain selection can be done here
+					%
+					case find_common_fork(Tips, S2) of
+						none -> S2;
+						StartEntry ->
+							update_main_chain(StartEntry,S2)
+					end;
+				false -> S2
+			end,
 			
-			% main chain selection can be done here
-			% 
-			
-			S2#state{best_height=Height};
+			S2A#state{best_height=Height};
 		true -> % others
 			S2
 	end,
